@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(lsof -i :8501 -i :8502)",
+      "Bash(kill 69855)",
+      "Bash(pip show gspread google-auth)",
+      "Bash(pip install gspread google-auth-oauthlib)",
+      "Bash(python3 -m pip install gspread google-auth-oauthlib)",
+      "Bash(python3 -c \":*)"
+    ]
+  }
+}
