@@ -1,6 +1,5 @@
 import streamlit as st
 import streamlit.components.v1 as components
-import pandas as pd
 import csv
 import io
 import os
@@ -13,12 +12,6 @@ import gspread
 APP_VERSION = "v1.0.0"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
-
-# Path to items CSV (same directory as app.py)
-ITEMS_CSV = os.path.join(os.path.dirname(__file__), "Streamlit Inventory Data - Items.csv")
-
-# Submissions log (written alongside app.py on each submit)
-SUBMISSIONS_CSV = os.path.join(os.path.dirname(__file__), "inventory_submissions.csv")
 
 # Color palette (warm earthy tones from .pen design)
 COLOR_BG_PAGE         = "#FBF7F2"
@@ -42,8 +35,9 @@ LOCATIONS = [
 ]
 
 # Google Sheets integration
-SPREADSHEET_ID    = "1int09gdLEXTXnydTLSSLmY-oNj3edG_ZKXgJC2CNZK0"
-LOG_WORKSHEET_GID = 1487457430
+SPREADSHEET_ID       = "1int09gdLEXTXnydTLSSLmY-oNj3edG_ZKXgJC2CNZK0"
+LOG_WORKSHEET_GID    = 1487457430
+ITEMS_WORKSHEET_NAME = "Items"
 
 # Category display config
 CATEGORY_META = {
@@ -57,23 +51,23 @@ CATEGORY_META = {
 # ==============================================================================
 # ##### HELPERS #####
 # ==============================================================================
-def load_categories(csv_path: str) -> list[dict]:
+def _build_categories_from_records(records: list) -> list[dict]:
     """
-    Parse the items CSV and build the CATEGORIES structure.
+    Build the CATEGORIES structure from gspread row dicts.
 
     Input type rules (driven by the 'Unit' column):
       - "box fill scale 1 to 10"  → slider  (0–10, step 1)
       - everything else            → stepper (0–Max Inventory, step 1)
     """
-    df = pd.read_csv(csv_path)
-    df.columns = [c.strip() for c in df.columns]
-
     categories = {}
-    for _, row in df.iterrows():
-        cat_name = str(row["Category"]).strip()
-        item_name = str(row["Item"]).strip()
-        max_inv = int(row["Max Inventory"])
-        unit = str(row["Unit"]).strip()
+    for row in records:
+        cat_name  = str(row.get("Category", "")).strip()
+        item_name = str(row.get("Item", "")).strip()
+        unit      = str(row.get("Unit", "")).strip()
+        max_inv   = int(row.get("Max Inventory", 0))
+
+        if not cat_name or not item_name:
+            continue
 
         if cat_name not in categories:
             meta = CATEGORY_META.get(cat_name, {"icon": "📋"})
@@ -187,10 +181,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Load categories from CSV (cached so it only reads once per session)
+# Load categories from the Items tab in Google Sheets (cached for the session)
 @st.cache_data
 def get_categories():
-    return load_categories(ITEMS_CSV)
+    gc      = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+    ws      = gc.open_by_key(SPREADSHEET_ID).worksheet(ITEMS_WORKSHEET_NAME)
+    records = ws.get_all_records()
+    return _build_categories_from_records(records)
 
 CATEGORIES = get_categories()
 
