@@ -1,8 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import csv
-import io
-import os
 from datetime import datetime, date
 import gspread
 
@@ -141,36 +137,6 @@ def format_value(item: dict, value) -> str:
         return f"{v} {item['unit']}"
 
 
-def build_export_csv(location: str, submitted_at: str, inventory: dict, categories: list) -> str:
-    """Build a CSV string of the submission for Google Sheets import."""
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Submitted At", "Location", "Category", "Item", "Value", "Unit"])
-    for cat in categories:
-        for item in cat["items"]:
-            val = inventory.get(item["name"], item["default"])
-            if item["input"] == "slider":
-                display = int(float(val)) if val else 0
-            else:
-                display = int(val) if val else 0
-            writer.writerow([submitted_at, location, cat["name"], item["name"], display, item["unit"]])
-    return output.getvalue()
-
-
-def append_to_submissions_log(location: str, submitted_at: str, inventory: dict, categories: list):
-    """Append this submission as rows to the local submissions log CSV."""
-    file_exists = os.path.exists(SUBMISSIONS_CSV)
-    with open(SUBMISSIONS_CSV, "a", newline="") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["Submitted At", "Location", "Category", "Item", "Value", "Unit"])
-        for cat in categories:
-            for item in cat["items"]:
-                val = inventory.get(item["name"], item["default"])
-                display = int(float(val)) if item["input"] == "slider" else int(val) if val else 0
-                writer.writerow([submitted_at, location, cat["name"], item["name"], display, item["unit"]])
-
-
 # ==============================================================================
 # ##### UI #####
 # ==============================================================================
@@ -242,79 +208,24 @@ st.markdown(f"""
         transition: background-color 0.2s ease !important;
     }}
 
-    /* ── Stepper ± buttons: buttons inside a column that has nested sub-columns
-          (identified by the stLayoutWrapper in the path, absent for simple dot buttons) ── */
-    div[data-testid="stExpander"]
-        div[data-testid="stColumn"]
-        > div[data-testid="stVerticalBlock"]
-        > div[data-testid="stLayoutWrapper"]
-        > div[data-testid="stHorizontalBlock"]
-        button[data-testid="stBaseButton-secondary"] {{
-        background-color: #EDE3D5 !important;
-        border: none !important;
-        border-radius: 10px !important;
-        padding: 4px 0 !important;
-        font-size: 20px !important;
-        font-weight: 400 !important;
+    /* ── Number input (stepper replacement) ── */
+    div[data-testid="stNumberInput"] {{
+        margin-top: -4px !important;
+    }}
+    div[data-testid="stNumberInput"] input {{
+        text-align: center !important;
+        font-weight: 600 !important;
+        font-size: 15px !important;
         color: {COLOR_TEXT_PRIMARY} !important;
-        min-height: 38px !important;
-        height: 38px !important;
+        border: 1px solid {COLOR_BORDER_SUBTLE} !important;
+        border-radius: 10px !important;
+        padding: 4px 8px !important;
     }}
-    div[data-testid="stExpander"]
-        div[data-testid="stColumn"]
-        > div[data-testid="stVerticalBlock"]
-        > div[data-testid="stLayoutWrapper"]
-        > div[data-testid="stHorizontalBlock"]
-        button[data-testid="stBaseButton-secondary"]:hover {{
-        background-color: #D9CBBA !important;
-        border-color: transparent !important;
+    div[data-testid="stNumberInput"] button {{
+        color: {COLOR_TEXT_PRIMARY} !important;
     }}
-    /* Tighten gap between stepper sub-columns */
-    div[data-testid="stExpander"] div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] {{
-        gap: 4px !important;
-    }}
-
-    /* ── Dot buttons (OOS toggle) ── */
-    [data-dot-state] button[data-testid="stBaseButton-secondary"] {{
-        background: transparent !important;
-        border: none !important;
-        padding: 0 !important;
-        min-height: 0 !important;
-        height: 38px !important;
-        font-size: 0 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        cursor: pointer !important;
-    }}
-    /* Hide the button's inner text element — only show the ::before circle */
-    [data-dot-state] button[data-testid="stBaseButton-secondary"] p {{
-        display: none !important;
-    }}
-    [data-dot-state] button[data-testid="stBaseButton-secondary"]::before {{
-        content: '' !important;
-        display: block !important;
-        width: 16px !important;
-        height: 16px !important;
-        border-radius: 50% !important;
-        transition: background 0.15s, transform 0.1s !important;
-        flex-shrink: 0 !important;
-    }}
-    /* Gray: not yet reported — matches design's $border-subtle fill */
-    [data-dot-state="empty"] button[data-testid="stBaseButton-secondary"]::before {{
-        background: {COLOR_BORDER_SUBTLE} !important;
-    }}
-    [data-dot-state="empty"] button[data-testid="stBaseButton-secondary"]:hover::before {{
-        background: {COLOR_TEXT_TERTIARY} !important;
-        transform: scale(1.15) !important;
-    }}
-    /* Red: confirmed out of stock */
-    [data-dot-state="oos"] button[data-testid="stBaseButton-secondary"]::before {{
-        background: #CC6B5A !important;
-    }}
-    [data-dot-state="oos"] button[data-testid="stBaseButton-secondary"]:hover::before {{
-        background: #B05040 !important;
-        transform: scale(1.15) !important;
+    div[data-testid="stNumberInput"] button:hover {{
+        color: {COLOR_ACCENT_GREEN} !important;
     }}
 
     /* ── Slider → green track & thumb ── */
@@ -551,53 +462,17 @@ def _oos_confirm_dialog(unreported: list):
             st.rerun(scope="app")
 
 
-def _toggle_confirmed_zero(inventory_key: str):
-    """Toggle OOS (confirmed zero) state for an item."""
-    cz = st.session_state.confirmed_zero
-    if inventory_key in cz:
-        cz.discard(inventory_key)
-    else:
-        cz.add(inventory_key)
-
-
-def _stepper_decrement(inventory_key: str):
-    """Decrement a stepper item (on_click callback), clamped to 0."""
-    st.session_state.inventory[inventory_key] = max(
-        0, st.session_state.inventory.get(inventory_key, 0) - 1
-    )
-
-
-def _stepper_increment(inventory_key: str, max_val: int):
-    """Increment a stepper item, clamped to max_val. Clears OOS flag."""
-    st.session_state.confirmed_zero.discard(inventory_key)
-    st.session_state.inventory[inventory_key] = min(
-        max_val, st.session_state.inventory.get(inventory_key, 0) + 1
-    )
-
-
-# Lucide circle-check icon — matches the design's reported-state dot
-_CIRCLE_CHECK_SVG = (
-    "<svg width='16' height='16' viewBox='0 0 24 24' fill='none' "
-    f"stroke='{COLOR_ACCENT_GREEN}' stroke-width='2.5' "
-    "stroke-linecap='round' stroke-linejoin='round'>"
-    "<circle cx='12' cy='12' r='10'/>"
-    "<polyline points='9 12 11 14.5 15 9.5'/>"
-    "</svg>"
-)
-
-
 @st.fragment
 def render_reporting_screen():
-    # Dynamic submit button color
-    reported, total = count_reported_items(st.session_state.inventory, CATEGORIES)
-    submit_color = COLOR_ACCENT_GREEN if reported == total else "#C4B8A5"
+    # Green submit button
     st.markdown(
-        f"<style>button[data-testid='stBaseButton-primary'] "
-        f"{{ background-color: {submit_color} !important; }}</style>",
+        f"<style>button[data-testid='stBaseButton-primary'],"
+        f"button[data-testid='stBaseButton-formSubmit'] "
+        f"{{ background-color: {COLOR_ACCENT_GREEN} !important; }}</style>",
         unsafe_allow_html=True,
     )
 
-    # Header
+    # Header (outside form so ← works as a normal button)
     col_back, col_title, col_date = st.columns([1, 4, 2])
     with col_back:
         if st.button("←", key="back_to_loc"):
@@ -618,137 +493,78 @@ def render_reporting_screen():
             unsafe_allow_html=True,
         )
 
-    # Progress — custom HTML matching design
-    reported, total = count_reported_items(st.session_state.inventory, CATEGORIES)
-    pct = reported / total if total > 0 else 0
-    fill_w = int(pct * 100)
-    st.markdown(
-        f"""<div style="margin:0.25rem 0 0.75rem;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <span style="color:{COLOR_TEXT_SECONDARY};font-size:12px;font-weight:500;">{reported} of {total} items updated</span>
-            <span style="color:{COLOR_ACCENT_GREEN};font-size:12px;font-weight:600;">{fill_w}%</span>
-          </div>
-          <div style="background:{COLOR_BORDER_SUBTLE};border-radius:3px;height:6px;width:100%;overflow:hidden;">
-            <div style="background:{COLOR_ACCENT_GREEN};border-radius:3px;height:6px;width:{fill_w}%;"></div>
-          </div>
-        </div>""",
-        unsafe_allow_html=True,
-    )
-
-    # Categories
-    for cat_idx, cat in enumerate(CATEGORIES):
-        count = len(cat["items"])
-        with st.expander(f"{cat['icon']} **{cat['name']}** `{count}`", expanded=True):
-            for item_idx, item in enumerate(cat["items"]):
-                key = item["name"]
-
-                # Init value
-                if key not in st.session_state.inventory:
-                    st.session_state.inventory[key] = item["default"]
-
-                val = st.session_state.inventory[key]
-                is_confirmed = key in st.session_state.confirmed_zero
-                has_stock = (
-                    float(val) > 0 if item["input"] == "slider" else int(val) > 0
+    # Reset form widget keys on a fresh session (prevents stale values)
+    if not st.session_state.inventory:
+        for ci, cat in enumerate(CATEGORIES):
+            for ii, item in enumerate(cat["items"]):
+                st.session_state[f"inp_{ci}_{ii}"] = (
+                    float(item["default"]) if item["input"] == "slider" else int(item["default"])
                 )
 
-                # Dot column: green HTML (has stock) or interactive button (zero)
-                # "○" = not yet confirmed zero  "●" = confirmed out of stock
-                dot_col, name_col, inp_col = st.columns([0.3, 2.7, 2])
-                with dot_col:
-                    if has_stock:
+    # ── Form: all inputs are client-side until Submit ─────────────────────
+    with st.form("inventory_form"):
+        for cat_idx, cat in enumerate(CATEGORIES):
+            count = len(cat["items"])
+            with st.expander(f"{cat['icon']} **{cat['name']}** `{count}`", expanded=True):
+                for item_idx, item in enumerate(cat["items"]):
+                    name_col, inp_col = st.columns([3, 2])
+                    with name_col:
                         st.markdown(
-                            f"<div style='display:flex;align-items:center;justify-content:center;"
-                            f"height:38px;'>{_CIRCLE_CHECK_SVG}</div>",
+                            f"<div style='display:flex;align-items:center;height:38px;overflow:hidden;'>"
+                            f"<span style='font-size:14px;font-weight:500;color:{COLOR_TEXT_PRIMARY};"
+                            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+                            f"{item['name']}</span></div>",
                             unsafe_allow_html=True,
                         )
-                    else:
-                        dot_char = "●" if is_confirmed else "○"
-                        st.button(
-                            dot_char,
-                            key=f"dot_{cat_idx}_{item_idx}",
-                            on_click=_toggle_confirmed_zero,
-                            args=(key,),
-                            use_container_width=True,
-                        )
-                with name_col:
-                    st.markdown(
-                        f"<div style='display:flex;align-items:center;height:38px;overflow:hidden;'>"
-                        f"<span style='font-size:14px;font-weight:500;color:{COLOR_TEXT_PRIMARY};"
-                        f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{key}</span>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                if item["input"] == "stepper":
                     with inp_col:
-                        minus_col, disp_col, plus_col = st.columns([1, 1, 1])
-                        with minus_col:
-                            st.button(
-                                "−",
-                                key=f"minus_{cat_idx}_{item_idx}",
-                                on_click=_stepper_decrement,
-                                args=(key,),
-                                use_container_width=True,
+                        fkey = f"inp_{cat_idx}_{item_idx}"
+                        if item["input"] == "stepper":
+                            st.number_input(
+                                item["name"],
+                                min_value=0,
+                                max_value=item["max"],
+                                step=1,
+                                key=fkey,
+                                label_visibility="collapsed",
                             )
-                        with disp_col:
-                            if is_confirmed and not has_stock:
-                                disp_text  = "OOS"
-                                disp_color = "#CC6B5A"
-                                disp_size  = "12px"
-                            else:
-                                disp_text  = str(int(val))
-                                disp_color = COLOR_TEXT_PRIMARY
-                                disp_size  = "15px"
-                            st.markdown(
-                                f"<div style='text-align:center;font-size:{disp_size};font-weight:600;"
-                                f"color:{disp_color};padding:7px 0;'>{disp_text}</div>",
-                                unsafe_allow_html=True,
+                        elif item["input"] == "slider":
+                            st.slider(
+                                item["name"],
+                                min_value=0,
+                                max_value=int(item["max"]),
+                                step=1,
+                                key=fkey,
+                                label_visibility="collapsed",
                             )
-                        with plus_col:
-                            st.button(
-                                "+",
-                                key=f"plus_{cat_idx}_{item_idx}",
-                                on_click=_stepper_increment,
-                                args=(key, item["max"]),
-                                use_container_width=True,
-                            )
-                elif item["input"] == "slider":
-                    with inp_col:
-                        new_val = st.slider(
-                            key,
-                            min_value=0,
-                            max_value=int(item["max"]),
-                            value=int(float(val)),
-                            step=1,
-                            key=f"slider_{cat_idx}_{item_idx}",
-                            label_visibility="collapsed",
-                        )
-                        if new_val > 0:
-                            st.session_state.confirmed_zero.discard(key)
-                        st.session_state.inventory[key] = new_val
 
-    st.markdown("")
+        submitted = st.form_submit_button(
+            "Submit Inventory", type="primary", use_container_width=True,
+        )
 
-    # Submit button — always enabled; intercepts if any items are unresolved
-    reported, total = count_reported_items(st.session_state.inventory, CATEGORIES)
-    all_reported    = reported == total
-    if st.button("Submit Inventory", key="submit_inventory", type="primary", use_container_width=True):
-        if all_reported:
+    # ── Handle form submission ────────────────────────────────────────────
+    if submitted:
+        # Sync form widget values → inventory dict
+        for ci, cat in enumerate(CATEGORIES):
+            for ii, item in enumerate(cat["items"]):
+                val = st.session_state[f"inp_{ci}_{ii}"]
+                st.session_state.inventory[item["name"]] = val
+
+        # Find items left at zero
+        unreported = [
+            item["name"]
+            for cat in CATEGORIES
+            for item in cat["items"]
+            if item["name"] not in st.session_state.confirmed_zero
+            and (float(st.session_state.inventory.get(item["name"], item["default"])) == 0
+                 if item["input"] == "slider"
+                 else int(st.session_state.inventory.get(item["name"], item["default"]) or 0) == 0)
+        ]
+
+        if unreported:
+            _oos_confirm_dialog(unreported)
+        else:
             st.session_state.screen = "review"
             st.rerun(scope="app")
-        else:
-            # Collect items with no qty and no OOS flag
-            unreported = [
-                item["name"]
-                for cat in CATEGORIES
-                for item in cat["items"]
-                if item["name"] not in st.session_state.confirmed_zero
-                and (float(st.session_state.inventory.get(item["name"], item["default"])) == 0
-                     if item["input"] == "slider"
-                     else int(st.session_state.inventory.get(item["name"], item["default"]) or 0) == 0)
-            ]
-            _oos_confirm_dialog(unreported)
 
 
 # ── SCREEN 3: Review & Submit ─────────────────────────────────────────────────
