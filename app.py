@@ -5,7 +5,7 @@ import gspread
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.1.0"
+APP_VERSION = "v1.2.0"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -711,163 +711,10 @@ def render_success_screen():
 
 # ── Router ────────────────────────────────────────────────────────────────────
 screen = st.session_state.screen
-if screen == "reporting":
-    # ── Optimistic UI + dot-state observer ──────────────────────────────────
-    # Runs once per full page load (outside @st.fragment); persists through
-    # all fragment reruns via window.parent references.
-    #
-    # Key idea: when the user taps +/−/dot rapidly, the capture-phase click
-    # handler updates the display INSTANTLY.  Each click still triggers a
-    # Streamlit server rerun, but server responses from earlier clicks would
-    # overwrite the later optimistic values — causing flicker.  To prevent
-    # that, optimistic values are stored in a map keyed by item name.  The
-    # MutationObserver re-applies them for 800 ms after the last tap, so
-    # intermediate server reruns never flash a stale number on screen.
-    # After the hold window expires the server's final value takes over.
-    components.html("""
-    <script>
-    (function() {
-        var D = window.parent.document, W = window.parent;
-        var HOLD = 800;                         /* ms to hold optimistic value */
-        if (!W.__ccOpt) W.__ccOpt = {};         /* { 's:ItemName': {t,c,sz,ex}, 'd:ItemName': {v,ex} } */
-
-        /* ── Helper: resolve item name from a button ── */
-        function itemName(btn, isStepper) {
-            var row;
-            if (isStepper) {
-                var inner = btn.closest('[data-testid="stHorizontalBlock"]');
-                var col   = inner && inner.closest('[data-testid="stColumn"]');
-                row       = col   && col.closest('[data-testid="stHorizontalBlock"]');
-            } else {
-                var wrap = btn.closest('[data-testid="stButton"]');
-                row      = wrap && wrap.closest('[data-testid="stHorizontalBlock"]');
-            }
-            if (!row) return null;
-            var cols = row.querySelectorAll(':scope > div[data-testid="stColumn"]');
-            return cols.length >= 2 ? cols[1].textContent.trim() : null;
-        }
-
-        /* ── MutationObserver: classify dots + re-apply optimistic values ── */
-        var raf = 0;
-        function refresh() {
-            var now = Date.now();
-
-            /* Classify dot buttons */
-            D.querySelectorAll('button[data-testid="stBaseButton-secondary"]').forEach(function(btn) {
-                var t = btn.textContent.trim();
-                var w = btn.closest('[data-testid="stButton"]');
-                if (!w) return;
-                if (t === '\u25cb' || t === '\u25cf') {
-                    var nm = itemName(btn, false);
-                    var o  = nm && W.__ccOpt['d:' + nm];
-                    if (o && o.ex > now) w.setAttribute('data-dot-state', o.v);
-                    else w.setAttribute('data-dot-state', t === '\u25cb' ? 'empty' : 'oos');
-                } else {
-                    w.removeAttribute('data-dot-state');
-                }
-            });
-
-            /* Re-apply optimistic stepper values */
-            D.querySelectorAll('[data-testid="stExpander"] [data-testid="stHorizontalBlock"]').forEach(function(row) {
-                var cols = row.querySelectorAll(':scope > div[data-testid="stColumn"]');
-                if (cols.length !== 3) return;
-                var inner = cols[2].querySelector('[data-testid="stHorizontalBlock"]');
-                if (!inner) return;
-                var nm = cols[1].textContent.trim();
-                var o  = W.__ccOpt['s:' + nm];
-                if (o && o.ex > now) {
-                    var ic = inner.querySelectorAll(':scope > div[data-testid="stColumn"]');
-                    if (ic.length === 3) {
-                        var d = ic[1].querySelector('div[style*="text-align"]');
-                        if (d && d.textContent.trim() !== o.t) {
-                            d.textContent = o.t; d.style.color = o.c; d.style.fontSize = o.sz;
-                        }
-                    }
-                }
-            });
-
-            /* Purge expired entries */
-            for (var k in W.__ccOpt) { if (W.__ccOpt[k].ex < now) delete W.__ccOpt[k]; }
-        }
-
-        if (W.__ccDotObs) W.__ccDotObs.disconnect();
-        var obs = new MutationObserver(function() {
-            cancelAnimationFrame(raf); raf = requestAnimationFrame(refresh);
-        });
-        obs.observe(D.body, { childList: true, subtree: true });
-        W.__ccDotObs = obs;
-        refresh();
-
-        /* ── Capture-phase click handler (registered once) ── */
-        if (!W.__ccOptClick) {
-            D.addEventListener('click', function(e) {
-                var btn = e.target.closest('button[data-testid="stBaseButton-secondary"]');
-                if (!btn) return;
-                var text = btn.textContent.trim();
-                var wrap = btn.closest('[data-testid="stButton"]');
-                var ex   = Date.now() + HOLD;
-
-                /* ── Dot toggle ── */
-                if (wrap && (text === '\u25cb' || text === '\u25cf')) {
-                    var ns = text === '\u25cb' ? 'oos' : 'empty';
-                    wrap.setAttribute('data-dot-state', ns);
-                    var nm = itemName(btn, false);
-                    if (nm) W.__ccOpt['d:' + nm] = { v: ns, ex: ex };
-
-                    /* Also flip the stepper display 0 ↔ OOS */
-                    var row = wrap.closest('[data-testid="stHorizontalBlock"]');
-                    if (!row) return;
-                    var cs = row.querySelectorAll(':scope > div[data-testid="stColumn"]');
-                    if (cs.length < 3) return;
-                    var ih = cs[2].querySelector('[data-testid="stHorizontalBlock"]');
-                    if (!ih) return;
-                    var ic = ih.querySelectorAll(':scope > div[data-testid="stColumn"]');
-                    if (ic.length !== 3) return;
-                    var dd = ic[1].querySelector('div[style*="text-align"]');
-                    if (!dd) return;
-                    if (ns === 'oos' && dd.textContent.trim() === '0') {
-                        dd.textContent = 'OOS'; dd.style.color = '#CC6B5A'; dd.style.fontSize = '12px';
-                        if (nm) W.__ccOpt['s:' + nm] = { t:'OOS', c:'#CC6B5A', sz:'12px', ex: ex };
-                    } else if (ns === 'empty' && dd.textContent.trim() === 'OOS') {
-                        dd.textContent = '0'; dd.style.color = '#2C1810'; dd.style.fontSize = '15px';
-                        if (nm) W.__ccOpt['s:' + nm] = { t:'0', c:'#2C1810', sz:'15px', ex: ex };
-                    }
-                    return;
-                }
-
-                /* ── Stepper +/− ── */
-                if (text === '\u2212' || text === '+') {
-                    var hb = btn.closest('[data-testid="stHorizontalBlock"]');
-                    if (!hb) return;
-                    var ic = hb.querySelectorAll(':scope > div[data-testid="stColumn"]');
-                    if (ic.length !== 3) return;
-                    var d = ic[1].querySelector('div[style*="text-align"]');
-                    if (!d) return;
-                    var nm  = itemName(btn, true);
-                    var cur = d.textContent.trim();
-                    var nt, nc = '#2C1810', nsz = '15px';
-
-                    if (cur === 'OOS') {
-                        if (text === '+') { nt = '1'; } else return;
-                    } else {
-                        var n = parseInt(cur, 10);
-                        if (isNaN(n)) return;
-                        nt = String(text === '+' ? n + 1 : Math.max(0, n - 1));
-                    }
-
-                    d.textContent = nt; d.style.color = nc; d.style.fontSize = nsz;
-                    if (nm) W.__ccOpt['s:' + nm] = { t: nt, c: nc, sz: nsz, ex: ex };
-                }
-            }, true);
-            W.__ccOptClick = true;
-        }
-    })();
-    </script>
-    """, height=0, scrolling=False)
-    render_reporting_screen()
-elif screen == "location": render_location_screen()
-elif screen == "review":   render_review_screen()
-elif screen == "success":  render_success_screen()
+if   screen == "reporting": render_reporting_screen()
+elif screen == "location":  render_location_screen()
+elif screen == "review":    render_review_screen()
+elif screen == "success":   render_success_screen()
 
 # Sidebar
 st.sidebar.markdown(f"**{APP_TITLE}** {APP_VERSION}")
