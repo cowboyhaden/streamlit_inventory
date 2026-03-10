@@ -9,7 +9,7 @@ import gspread
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.0.0"
+APP_VERSION = "v1.1.0"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
