@@ -512,7 +512,9 @@ def render_location_screen():
 
     st.markdown(
         f'<p style="text-align:center; color:{COLOR_TEXT_TERTIARY}; font-size:12px; padding-top:1.5rem;">'
-        f'{get_today_str()}</p>',
+        f'{get_today_str()}</p>'
+        f'<p style="text-align:center; color:{COLOR_BORDER_SUBTLE}; font-size:11px; margin-top:0.1rem;">'
+        f'{APP_VERSION}</p>',
         unsafe_allow_html=True,
     )
 
@@ -632,30 +634,6 @@ def render_reporting_screen():
         </div>""",
         unsafe_allow_html=True,
     )
-
-    # JS: MutationObserver to tag dot buttons with data-dot-state for CSS targeting
-    components.html("""
-    <script>
-    (function() {
-        var doc = window.parent.document;
-        if (window.parent.__ccDotObs) { window.parent.__ccDotObs.disconnect(); }
-        function classify() {
-            doc.querySelectorAll('button[data-testid="stBaseButton-secondary"]').forEach(function(btn) {
-                var t = btn.textContent.trim();
-                var w = btn.closest('[data-testid="stButton"]');
-                if (!w) return;
-                if (t === '\u25cb') { w.setAttribute('data-dot-state','empty'); }
-                else if (t === '\u25cf') { w.setAttribute('data-dot-state','oos'); }
-                else { w.removeAttribute('data-dot-state'); }
-            });
-        }
-        var obs = new MutationObserver(classify);
-        obs.observe(doc.body, {childList:true, subtree:true});
-        window.parent.__ccDotObs = obs;
-        classify();
-    })();
-    </script>
-    """, height=0, scrolling=False)
 
     # Categories
     for cat_idx, cat in enumerate(CATEGORIES):
@@ -917,10 +895,36 @@ def render_success_screen():
 
 # ── Router ────────────────────────────────────────────────────────────────────
 screen = st.session_state.screen
-if   screen == "location":  render_location_screen()
-elif screen == "reporting": render_reporting_screen()
-elif screen == "review":    render_review_screen()
-elif screen == "success":   render_success_screen()
+if screen == "reporting":
+    # Inject dot-state observer once per full rerun; the MutationObserver
+    # persists through all fragment reruns so it doesn't need to re-run on
+    # every button press.
+    components.html("""
+    <script>
+    (function() {
+        var doc = window.parent.document;
+        if (window.parent.__ccDotObs) { window.parent.__ccDotObs.disconnect(); }
+        function classify() {
+            doc.querySelectorAll('button[data-testid="stBaseButton-secondary"]').forEach(function(btn) {
+                var t = btn.textContent.trim();
+                var w = btn.closest('[data-testid="stButton"]');
+                if (!w) return;
+                if (t === '\u25cb') { w.setAttribute('data-dot-state','empty'); }
+                else if (t === '\u25cf') { w.setAttribute('data-dot-state','oos'); }
+                else { w.removeAttribute('data-dot-state'); }
+            });
+        }
+        var obs = new MutationObserver(classify);
+        obs.observe(doc.body, {childList:true, subtree:true});
+        window.parent.__ccDotObs = obs;
+        classify();
+    })();
+    </script>
+    """, height=0, scrolling=False)
+    render_reporting_screen()
+elif screen == "location": render_location_screen()
+elif screen == "review":   render_review_screen()
+elif screen == "success":  render_success_screen()
 
 # Sidebar
 st.sidebar.markdown(f"**{APP_TITLE}** {APP_VERSION}")
