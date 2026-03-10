@@ -546,7 +546,7 @@ def _oos_confirm_dialog(unreported: list):
             for name in unreported:
                 st.session_state.confirmed_zero.add(name)
             st.session_state.screen = "review"
-            st.rerun()
+            st.rerun(scope="app")
 
 
 def _toggle_confirmed_zero(inventory_key: str):
@@ -584,6 +584,7 @@ _CIRCLE_CHECK_SVG = (
 )
 
 
+@st.fragment
 def render_reporting_screen():
     # Dynamic submit button color
     reported, total = count_reported_items(st.session_state.inventory, CATEGORIES)
@@ -601,7 +602,7 @@ def render_reporting_screen():
             st.session_state.screen         = "location"
             st.session_state.inventory      = {}
             st.session_state.confirmed_zero = set()
-            st.rerun()
+            st.rerun(scope="app")
     with col_title:
         st.markdown(
             f"<p style='font-size:20px; font-weight:700; color:{COLOR_TEXT_PRIMARY}; margin:0; padding-top:4px;'>"
@@ -757,7 +758,7 @@ def render_reporting_screen():
     if st.button("Submit Inventory", key="submit_inventory", type="primary", use_container_width=True):
         if all_reported:
             st.session_state.screen = "review"
-            st.rerun()
+            st.rerun(scope="app")
         else:
             # Collect items with no qty and no OOS flag
             unreported = [
