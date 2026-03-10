@@ -896,28 +896,102 @@ def render_success_screen():
 # ── Router ────────────────────────────────────────────────────────────────────
 screen = st.session_state.screen
 if screen == "reporting":
-    # Inject dot-state observer once per full rerun; the MutationObserver
-    # persists through all fragment reruns so it doesn't need to re-run on
-    # every button press.
+    # ── Optimistic UI + dot-state observer ──────────────────────────────────
+    # Runs once per full page load; persists through all fragment reruns.
+    # 1. MutationObserver (debounced via rAF) classifies dot buttons for CSS.
+    # 2. Capture-phase click handler gives instant visual feedback on +/−/dot
+    #    BEFORE the Streamlit server round-trip completes.
     components.html("""
     <script>
     (function() {
         var doc = window.parent.document;
-        if (window.parent.__ccDotObs) { window.parent.__ccDotObs.disconnect(); }
+
+        /* ── 1. Debounced dot-state classifier ── */
+        var rafId = 0;
         function classify() {
             doc.querySelectorAll('button[data-testid="stBaseButton-secondary"]').forEach(function(btn) {
                 var t = btn.textContent.trim();
                 var w = btn.closest('[data-testid="stButton"]');
                 if (!w) return;
-                if (t === '\u25cb') { w.setAttribute('data-dot-state','empty'); }
-                else if (t === '\u25cf') { w.setAttribute('data-dot-state','oos'); }
-                else { w.removeAttribute('data-dot-state'); }
+                if (t === '\u25cb')      w.setAttribute('data-dot-state', 'empty');
+                else if (t === '\u25cf') w.setAttribute('data-dot-state', 'oos');
+                else                     w.removeAttribute('data-dot-state');
             });
         }
-        var obs = new MutationObserver(classify);
-        obs.observe(doc.body, {childList:true, subtree:true});
+        function scheduleClassify() {
+            cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(classify);
+        }
+        if (window.parent.__ccDotObs) window.parent.__ccDotObs.disconnect();
+        var obs = new MutationObserver(scheduleClassify);
+        obs.observe(doc.body, { childList: true, subtree: true });
         window.parent.__ccDotObs = obs;
         classify();
+
+        /* ── 2. Optimistic click handler (registered once) ── */
+        if (!window.parent.__ccOptClick) {
+            doc.addEventListener('click', function(e) {
+                var btn = e.target.closest('button[data-testid="stBaseButton-secondary"]');
+                if (!btn) return;
+                var text = btn.textContent.trim();
+                var wrapper = btn.closest('[data-testid="stButton"]');
+
+                /* Dot toggle: instantly swap appearance */
+                if (wrapper && text === '\u25cb') {
+                    wrapper.setAttribute('data-dot-state', 'oos');
+                    /* Find sibling stepper display and show OOS */
+                    var row = wrapper.closest('[data-testid="stHorizontalBlock"]');
+                    if (row) {
+                        var disp = row.querySelector('div[style*="text-align:center"]');
+                        if (disp && disp.textContent.trim() === '0') {
+                            disp.textContent = 'OOS';
+                            disp.style.color = '#CC6B5A';
+                            disp.style.fontSize = '12px';
+                        }
+                    }
+                    return;
+                }
+                if (wrapper && text === '\u25cf') {
+                    wrapper.setAttribute('data-dot-state', 'empty');
+                    var row = wrapper.closest('[data-testid="stHorizontalBlock"]');
+                    if (row) {
+                        var disp = row.querySelector('div[style*="text-align:center"]');
+                        if (disp && disp.textContent.trim() === 'OOS') {
+                            disp.textContent = '0';
+                            disp.style.color = '#2C1810';
+                            disp.style.fontSize = '15px';
+                        }
+                    }
+                    return;
+                }
+
+                /* Stepper +/−: instantly update the number */
+                if (text === '\u2212' || text === '+') {
+                    var hBlock = btn.closest('[data-testid="stHorizontalBlock"]');
+                    if (!hBlock) return;
+                    var cols = hBlock.querySelectorAll(':scope > div[data-testid="stColumn"]');
+                    if (cols.length !== 3) return;
+                    var dispEl = cols[1].querySelector('div[style*="text-align"]');
+                    if (!dispEl) return;
+                    var cur = dispEl.textContent.trim();
+
+                    if (cur === 'OOS') {
+                        if (text === '+') {
+                            dispEl.textContent = '1';
+                            dispEl.style.color = '#2C1810';
+                            dispEl.style.fontSize = '15px';
+                        }
+                        return;
+                    }
+
+                    var n = parseInt(cur, 10);
+                    if (isNaN(n)) return;
+                    var next = text === '+' ? n + 1 : Math.max(0, n - 1);
+                    dispEl.textContent = String(next);
+                }
+            }, true);   /* capture phase → fires before Streamlit */
+            window.parent.__ccOptClick = true;
+        }
     })();
     </script>
     """, height=0, scrolling=False)
