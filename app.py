@@ -5,7 +5,7 @@ import gspread
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.2.0"
+APP_VERSION = "v1.2.1"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -208,7 +208,7 @@ st.markdown(f"""
         transition: background-color 0.2s ease !important;
     }}
 
-    /* ── Number input (stepper replacement) ── */
+    /* ── Number input ── */
     div[data-testid="stNumberInput"] {{
         margin-top: -4px !important;
     }}
@@ -221,10 +221,29 @@ st.markdown(f"""
         border-radius: 10px !important;
         padding: 4px 8px !important;
     }}
+    /* Force step buttons to always be visible and touch-friendly */
     div[data-testid="stNumberInput"] button {{
+        opacity: 1 !important;
+        visibility: visible !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        width: 36px !important;
+        min-width: 36px !important;
+        height: 36px !important;
+        min-height: 36px !important;
+        border-radius: 50% !important;
+        background: {COLOR_BG_CARD} !important;
+        border: 1px solid {COLOR_BORDER_SUBTLE} !important;
         color: {COLOR_TEXT_PRIMARY} !important;
+        font-size: 18px !important;
+        font-weight: 500 !important;
+        cursor: pointer !important;
+        padding: 0 !important;
     }}
     div[data-testid="stNumberInput"] button:hover {{
+        background: {COLOR_ACCENT_GREEN_LT} !important;
+        border-color: {COLOR_ACCENT_GREEN} !important;
         color: {COLOR_ACCENT_GREEN} !important;
     }}
 
