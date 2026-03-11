@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.11"
+APP_VERSION = "v1.4.12"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -221,10 +221,10 @@ def _inject_css():
         margin: 0 !important;
         padding: 0 !important;
         border: none !important;
-    }
+    }}
 
     /* ── Hide payload text input completely ── */
-    div[data-testid="stTextInput"]:has(input[aria-label="payload_data"]) {
+    div[data-testid="stTextInput"]:has(input[aria-label="payload_data"]) {{
         display: none !important;
     }}
 
