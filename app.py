@@ -1,13 +1,14 @@
 import streamlit as st
 import streamlit.components.v1 as components
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 import gspread
 import json
 
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.10"
+APP_VERSION = "v1.4.11"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -104,7 +105,7 @@ def _get_gspread_client():
 
 
 def get_greeting() -> str:
-    hour = datetime.now().hour
+    hour = datetime.now(ZoneInfo("America/Denver")).hour
     if hour < 12:
         return "Good morning"
     elif hour < 17:
@@ -113,11 +114,11 @@ def get_greeting() -> str:
 
 
 def get_today_str() -> str:
-    return date.today().strftime("%A, %B %-d, %Y")
+    return datetime.now(ZoneInfo("America/Denver")).strftime("%A, %B %-d, %Y")
 
 
 def get_today_short() -> str:
-    return date.today().strftime("%b %-d")
+    return datetime.now(ZoneInfo("America/Denver")).strftime("%b %-d")
 
 
 
@@ -220,6 +221,11 @@ def _inject_css():
         margin: 0 !important;
         padding: 0 !important;
         border: none !important;
+    }
+
+    /* ── Hide payload text input completely ── */
+    div[data-testid="stTextInput"]:has(input[aria-label="payload_data"]) {
+        display: none !important;
     }}
 
     /* ── Custom HTML stepper (rendered via st.markdown) ── */
@@ -391,7 +397,7 @@ def get_last_reported_dates() -> dict:
                 latest[loc] = d
 
         # Format as relative strings
-        today   = date.today()
+        today   = datetime.now(ZoneInfo("America/Denver")).date()
         result  = {}
         for loc, d_str in latest.items():
             try:
@@ -1050,7 +1056,7 @@ def render_review_screen():
         )
     st.markdown(
         f"<p style='color:{COLOR_TEXT_SECONDARY}; font-size:13px; margin-top:-0.4rem;'>"
-        f"{st.session_state.location} · {get_today_short()}, {date.today().year}</p>",
+        f"{st.session_state.location} · {get_today_short()}, {datetime.now(ZoneInfo('America/Denver')).year}</p>",
         unsafe_allow_html=True,
     )
     st.markdown("")
@@ -1089,7 +1095,7 @@ def render_review_screen():
     st.markdown("")
 
     if st.button("Submit Inventory", key="final_submit", type="primary", use_container_width=True):
-        now = datetime.now()
+        now = datetime.now(ZoneInfo("America/Denver"))
         st.session_state.submitted_time = now.strftime("%-I:%M %p")
 
         # Write to Google Sheets
