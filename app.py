@@ -1,11 +1,13 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from datetime import datetime, date
 import gspread
+import json
 
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.2.1"
+APP_VERSION = "v1.4.6"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -60,7 +62,10 @@ def _build_categories_from_records(records: list) -> list[dict]:
         cat_name  = str(row.get("Category", "")).strip()
         item_name = str(row.get("Item", "")).strip()
         unit      = str(row.get("Unit", "")).strip()
-        max_inv   = int(row.get("Max Inventory", 0))
+        try:
+            max_inv = int(row.get("Max Inventory", 0) or 0)
+        except (ValueError, TypeError):
+            max_inv = 0
 
         if not cat_name or not item_name:
             continue
@@ -92,6 +97,12 @@ def _build_categories_from_records(records: list) -> list[dict]:
     return list(categories.values())
 
 
+@st.cache_resource
+def _get_gspread_client():
+    """Return a cached gspread client using the service account from secrets."""
+    return gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+
+
 def get_greeting() -> str:
     hour = datetime.now().hour
     if hour < 12:
@@ -109,31 +120,14 @@ def get_today_short() -> str:
     return date.today().strftime("%b %-d")
 
 
-def count_reported_items(inventory: dict, categories: list) -> tuple[int, int]:
-    """Return (reported_count, total_count).
-    An item counts as reported if it has a value > 0 OR is in confirmed_zero."""
-    confirmed_zero = getattr(st.session_state, "confirmed_zero", set())
-    reported, total = 0, 0
-    for cat in categories:
-        for item in cat["items"]:
-            total += 1
-            val = inventory.get(item["name"], item["default"])
-            if item["input"] == "slider":
-                if float(val) > 0 or item["name"] in confirmed_zero:
-                    reported += 1
-            else:
-                if int(val) > 0 or item["name"] in confirmed_zero:
-                    reported += 1
-    return reported, total
-
 
 def format_value(item: dict, value) -> str:
     """Format a value with its unit for review display."""
     if item["input"] == "slider":
-        v = float(value) if value else 0.0
+        v = float(value) if value is not None else 0.0
         return f"{int(v)} {item['unit']}"
     else:
-        v = int(value) if value else 0
+        v = int(value) if value is not None else 0
         return f"{v} {item['unit']}"
 
 
@@ -150,7 +144,7 @@ st.set_page_config(
 # Load categories from the Items tab in Google Sheets (cached for the session)
 @st.cache_data
 def get_categories():
-    gc      = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+    gc      = _get_gspread_client()
     ws      = gc.open_by_key(SPREADSHEET_ID).worksheet(ITEMS_WORKSHEET_NAME)
     records = ws.get_all_records()
     return _build_categories_from_records(records)
@@ -158,16 +152,22 @@ def get_categories():
 CATEGORIES = get_categories()
 
 # Session state init
-if "screen"          not in st.session_state: st.session_state.screen          = "location"
-if "location"        not in st.session_state: st.session_state.location        = None
-if "manager_name"    not in st.session_state: st.session_state.manager_name    = ""
-if "inventory"       not in st.session_state: st.session_state.inventory       = {}
-if "confirmed_zero"  not in st.session_state: st.session_state.confirmed_zero  = set()
-if "submitted_time"  not in st.session_state: st.session_state.submitted_time  = None
-if "sheets_status"   not in st.session_state: st.session_state.sheets_status   = None  # True/False/None
+_SESSION_DEFAULTS = {
+    "screen":         "location",
+    "location":       None,
+    "manager_name":   "",
+    "inventory":      {},
+    "confirmed_zero": set(),
+    "submitted_time": None,
+    "sheets_status":  None,
+}
+for _key, _default in _SESSION_DEFAULTS.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _default
 
-# Custom CSS — mobile-first, warm design
-st.markdown(f"""
+def _inject_css():
+    """Inject custom CSS — mobile-first, warm design."""
+    st.markdown(f"""
 <style>
     .stApp {{
         background-color: {COLOR_BG_PAGE};
@@ -208,43 +208,99 @@ st.markdown(f"""
         transition: background-color 0.2s ease !important;
     }}
 
-    /* ── Number input ── */
+    /* ── Number input: visually hidden so React can focus/blur it ── */
     div[data-testid="stNumberInput"] {{
-        margin-top: -4px !important;
-    }}
-    div[data-testid="stNumberInput"] input {{
-        text-align: center !important;
-        font-weight: 600 !important;
-        font-size: 15px !important;
-        color: {COLOR_TEXT_PRIMARY} !important;
-        border: 1px solid {COLOR_BORDER_SUBTLE} !important;
-        border-radius: 10px !important;
-        padding: 4px 8px !important;
-    }}
-    /* Force step buttons to always be visible and touch-friendly */
-    div[data-testid="stNumberInput"] button {{
-        opacity: 1 !important;
-        visibility: visible !important;
-        display: inline-flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        width: 36px !important;
-        min-width: 36px !important;
-        height: 36px !important;
-        min-height: 36px !important;
-        border-radius: 50% !important;
-        background: {COLOR_BG_CARD} !important;
-        border: 1px solid {COLOR_BORDER_SUBTLE} !important;
-        color: {COLOR_TEXT_PRIMARY} !important;
-        font-size: 18px !important;
-        font-weight: 500 !important;
-        cursor: pointer !important;
+        position: absolute !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        width: 1px !important;
+        height: 1px !important;
+        overflow: hidden !important;
+        z-index: -100 !important;
+        margin: 0 !important;
         padding: 0 !important;
+        border: none !important;
     }}
-    div[data-testid="stNumberInput"] button:hover {{
-        background: {COLOR_ACCENT_GREEN_LT} !important;
-        border-color: {COLOR_ACCENT_GREEN} !important;
-        color: {COLOR_ACCENT_GREEN} !important;
+
+    /* ── Custom HTML stepper (rendered via st.markdown) ── */
+    .cc-stepper {{
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        height: 44px;
+    }}
+    .cc-minus, .cc-plus {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: {COLOR_BG_CARD};
+        border: 1px solid {COLOR_BORDER_SUBTLE};
+        color: {COLOR_TEXT_PRIMARY};
+        font-size: 20px;
+        font-weight: 300;
+        cursor: pointer;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
+        -webkit-user-select: none;
+        line-height: 1;
+        flex-shrink: 0;
+    }}
+    .cc-minus:active, .cc-plus:active {{
+        background: {COLOR_ACCENT_GREEN_LT};
+        border-color: {COLOR_ACCENT_GREEN};
+        color: {COLOR_ACCENT_GREEN};
+    }}
+    .cc-value {{
+        font-size: 15px;
+        font-weight: 600;
+        color: {COLOR_TEXT_PRIMARY};
+        text-align: center;
+        min-width: 28px;
+    }}
+    .cc-value.oos {{
+        font-size: 12px;
+        color: #CC6B5A;
+    }}
+
+    /* ── OOS dot (left of item name) ── */
+    /* Default: gray outline circle. .updated = green fill. .oos = red fill */
+    .cc-dot {{
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: transparent;
+        border: 2px solid {COLOR_BORDER_SUBTLE};
+        cursor: pointer;
+        touch-action: manipulation;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        flex-shrink: 0;
+        box-sizing: border-box;
+        transition: background 0.15s ease, border-color 0.15s ease;
+    }}
+    /* Invisible ::after expands tap target to ~44×44 without affecting layout */
+    .cc-dot::after {{
+        content: '';
+        position: absolute;
+        inset: -11px;
+    }}
+    .cc-dot.updated {{
+        background: {COLOR_ACCENT_GREEN};
+        border-color: {COLOR_ACCENT_GREEN};
+    }}
+    .cc-dot.oos {{
+        background: #CC6B5A;
+        border-color: #CC6B5A;
     }}
 
     /* ── Slider → green track & thumb ── */
@@ -308,6 +364,8 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
+_inject_css()
+
 
 # ==============================================================================
 # ##### GOOGLE SHEETS #####
@@ -320,7 +378,7 @@ def get_last_reported_dates() -> dict:
     if "gcp_service_account" not in st.secrets:
         return {}
     try:
-        gc      = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        gc      = _get_gspread_client()
         ws      = gc.open_by_key(SPREADSHEET_ID).get_worksheet_by_id(LOG_WORKSHEET_GID)
         records = ws.get_all_records()          # list of dicts, header row = col names
 
@@ -368,10 +426,11 @@ def write_to_google_sheets(
     if "gcp_service_account" not in st.secrets:
         return False, "gcp_service_account not configured in Streamlit secrets."
 
-    confirmed_zero = confirmed_zero or set()
+    if confirmed_zero is None:
+        confirmed_zero = set()
 
     try:
-        gc          = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        gc          = _get_gspread_client()
         spreadsheet = gc.open_by_key(SPREADSHEET_ID)
         worksheet   = spreadsheet.get_worksheet_by_id(LOG_WORKSHEET_GID)
 
@@ -519,6 +578,23 @@ def render_reporting_screen():
                 st.session_state[f"inp_{ci}_{ii}"] = (
                     float(item["default"]) if item["input"] == "slider" else int(item["default"])
                 )
+                if item["input"] == "slider":
+                    st.session_state[f"oos_{ci}_{ii}"] = 0
+
+    # ── Progress bar (live-updated by JS, no server round-trips) ─────────
+    total_items = sum(len(cat["items"]) for cat in CATEGORIES)
+    st.markdown(
+        f"<div style='margin-bottom:1rem;'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>"
+        f"<span style='font-size:12px;color:{COLOR_TEXT_SECONDARY};font-weight:500;'>Items reported</span>"
+        f"<span id='cc-pl' style='font-size:12px;font-weight:700;color:{COLOR_TEXT_PRIMARY};'>0 / {total_items}</span>"
+        f"</div>"
+        f"<div style='background:{COLOR_BORDER_SUBTLE};border-radius:3px;height:6px;'>"
+        f"<div id='cc-pb' style='background:{COLOR_ACCENT_GREEN};border-radius:3px;height:6px;width:0%;transition:width 0.3s ease;'></div>"
+        f"</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
     # ── Form: all inputs are client-side until Submit ─────────────────────
     with st.form("inventory_form"):
@@ -528,8 +604,15 @@ def render_reporting_screen():
                 for item_idx, item in enumerate(cat["items"]):
                     name_col, inp_col = st.columns([3, 2])
                     with name_col:
+                        if item["input"] == "stepper":
+                            dot_html = f'<span class="cc-dot" data-item-name="{item["name"]}"></span>'
+                        elif item["input"] == "slider":
+                            dot_html = f'<span class="cc-dot cc-slider-dot" data-item-name="{item["name"]}"></span>'
+                        else:
+                            dot_html = ""
                         st.markdown(
-                            f"<div style='display:flex;align-items:center;height:38px;overflow:hidden;'>"
+                            f"<div style='display:flex;align-items:center;height:44px;gap:8px;'>"
+                            f"{dot_html}"
                             f"<span style='font-size:14px;font-weight:500;color:{COLOR_TEXT_PRIMARY};"
                             f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
                             f"{item['name']}</span></div>",
@@ -538,15 +621,35 @@ def render_reporting_screen():
                     with inp_col:
                         fkey = f"inp_{cat_idx}_{item_idx}"
                         if item["input"] == "stepper":
+                            # Hidden data widget (read by st.form on submit)
+                            # min_value=-1 allows -1 as OOS sentinel
                             st.number_input(
                                 item["name"],
-                                min_value=0,
+                                min_value=-1,
                                 max_value=item["max"],
                                 step=1,
                                 key=fkey,
                                 label_visibility="collapsed",
                             )
+                            # Visible HTML stepper (JS bridges clicks → hidden input)
+                            st.markdown(
+                                f'<div class="cc-stepper" data-item-name="{item["name"]}">'
+                                '<span class="cc-minus">&minus;</span>'
+                                '<span class="cc-value">0</span>'
+                                '<span class="cc-plus">+</span>'
+                                '</div>',
+                                unsafe_allow_html=True,
+                            )
                         elif item["input"] == "slider":
+                            # Hidden OOS flag (-1 = OOS, 0 = not OOS)
+                            st.number_input(
+                                f"{item['name']} OOS",
+                                min_value=-1,
+                                max_value=0,
+                                step=1,
+                                key=f"oos_{cat_idx}_{item_idx}",
+                                label_visibility="collapsed",
+                            )
                             st.slider(
                                 item["name"],
                                 min_value=0,
@@ -556,27 +659,43 @@ def render_reporting_screen():
                                 label_visibility="collapsed",
                             )
 
+        st.text_input("payload_data", key="inventory_payload", label_visibility="collapsed")
+        
         submitted = st.form_submit_button(
             "Submit Inventory", type="primary", use_container_width=True,
         )
 
     # ── Handle form submission ────────────────────────────────────────────
     if submitted:
-        # Sync form widget values → inventory dict
+        # Parse the JSON payload from the hidden input
+        try:
+            payload_str = st.session_state.get("inventory_payload", "{}")
+            payload = json.loads(payload_str) if payload_str else {}
+        except Exception:
+            payload = {}
+
+        # Pass 1: read all form widget values → inventory dict
         for ci, cat in enumerate(CATEGORIES):
             for ii, item in enumerate(cat["items"]):
-                val = st.session_state[f"inp_{ci}_{ii}"]
-                st.session_state.inventory[item["name"]] = val
+                val = payload.get(item["name"])
+                if val is None:
+                    # Fallback to session state defaults or slider
+                    val = st.session_state.get(f"inp_{ci}_{ii}", item["default"])
 
-        # Find items left at zero
+                if int(float(val)) == -1:
+                    # OOS dot was tapped → confirmed OOS
+                    st.session_state.confirmed_zero.add(item["name"])
+                    st.session_state.inventory[item["name"]] = 0
+                else:
+                    st.session_state.inventory[item["name"]] = val
+
+        # Pass 2: items at zero without confirmed OOS need the dialog
         unreported = [
             item["name"]
             for cat in CATEGORIES
             for item in cat["items"]
             if item["name"] not in st.session_state.confirmed_zero
-            and (float(st.session_state.inventory.get(item["name"], item["default"])) == 0
-                 if item["input"] == "slider"
-                 else int(st.session_state.inventory.get(item["name"], item["default"]) or 0) == 0)
+            and int(float(st.session_state.inventory.get(item["name"], item["default"]) or 0)) == 0
         ]
 
         if unreported:
@@ -584,6 +703,346 @@ def render_reporting_screen():
         else:
             st.session_state.screen = "review"
             st.rerun(scope="app")
+
+    _inject_stepper_js()
+
+
+def _inject_stepper_js():
+    """Bridge HTML stepper/slider clicks to hidden st.number_input values.
+
+    The real st.number_input widgets are display:none (CSS). The user
+    sees .cc-stepper HTML rendered by st.markdown. This script connects
+    the two: clicking - or + on the HTML stepper updates the hidden
+    input via React's native setter, so st.form reads the correct value
+    on submit. Also bridges OOS dots for slider items and tracks slider
+    changes for the progress bar.
+    """
+    components.html("""<script>
+(function() {
+    var D = window.parent.document, W = window.parent;
+
+    /* Set a hidden input's value so that Streamlit's React state picks it up.
+       Strategy 1: Walk React's fiber tree to find and invoke the component's
+       own onChange handler directly — this updates React state synchronously.
+       Strategy 2 (fallback): Native setter + _valueTracker reset + DOM events. */
+    function nativeSet(inp, val) {
+        var valStr = String(val);
+
+        inp.focus();
+        
+        /* Set the actual DOM value first */
+        var setter = Object.getOwnPropertyDescriptor(
+            W.HTMLInputElement.prototype, 'value'
+        ).set;
+        setter.call(inp, valStr);
+
+        /* Strategy 1: React fiber onChange */
+        var fiberKey = Object.keys(inp).find(function(k) {
+            return k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance');
+        });
+        if (fiberKey) {
+            var node = inp[fiberKey];
+            while (node) {
+                var props = node.memoizedProps || node.pendingProps;
+                if (props && typeof props.onChange === 'function') {
+                    props.onChange({ target: inp, currentTarget: inp });
+                    return;
+                }
+                node = node.return;
+            }
+        }
+
+        /* Trigger React onChange via native events fallback */
+        var tracker = inp._valueTracker;
+        if (tracker) tracker.setValue(valStr === '0' ? '1' : '0');
+        
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        inp.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter' }));
+        inp.dispatchEvent(new KeyboardEvent('keyup',  { bubbles: true, cancelable: true, key: 'Enter', code: 'Enter' }));
+        
+        inp.blur();
+    }
+
+    /* Sync the dot circle color: gray=unreported, green=updated, red=OOS */
+    function syncDot(dot, val) {
+        if (val === -1) {
+            dot.classList.remove('updated');
+            dot.classList.add('oos');
+        } else if (val > 0) {
+            dot.classList.remove('oos');
+            dot.classList.add('updated');
+        } else {
+            dot.classList.remove('oos');
+            dot.classList.remove('updated');
+        }
+    }
+
+    /* Recount all items by row and update the progress bar.
+       Uses requestAnimationFrame to batch DOM writes and avoid
+       triggering the MutationObserver in an infinite loop. */
+    var _progQueued = false;
+    function updateProgress() {
+        if (_progQueued) return;
+        _progQueued = true;
+        W.requestAnimationFrame(function() {
+            _progQueued = false;
+            var rows = D.querySelectorAll('[data-testid="stHorizontalBlock"]');
+            var total = 0, reported = 0;
+            rows.forEach(function(row) {
+                var stepper = row.querySelector('.cc-stepper');
+                var slider  = row.querySelector('[data-testid="stSlider"] [role="slider"]');
+                if (stepper) {
+                    total++;
+                    var inp = row.querySelector('input[type="number"]');
+                    if (inp) {
+                        var v = parseInt(inp.value);
+                        if (!isNaN(v) && v !== 0) reported++;
+                    }
+                } else if (slider) {
+                    total++;
+                    var sv = parseInt(slider.getAttribute('aria-valuenow'));
+                    /* Check the hidden OOS flag input */
+                    var oosInp = row.querySelector('input[type="number"]');
+                    var oosVal = oosInp ? parseInt(oosInp.value) : 0;
+                    if ((!isNaN(sv) && sv > 0) || oosVal === -1) reported++;
+                }
+            });
+            var pb = D.getElementById('cc-pb');
+            var pl = D.getElementById('cc-pl');
+            if (pb && pl && total > 0) {
+                pb.style.width = Math.round(reported / total * 100) + '%';
+                pl.textContent = reported + ' / ' + total;
+            }
+        });
+    }
+
+    /* Show normal count in stepper */
+    function showCount(valSpan, n) {
+        valSpan.textContent = String(n);
+        valSpan.classList.remove('oos');
+    }
+    /* Show OOS label in stepper */
+    function showOOS(valSpan) {
+        valSpan.textContent = 'OOS';
+        valSpan.classList.add('oos');
+    }
+
+    /* ── Bridge a stepper element to its hidden number input ── */
+    function bridge(stepper) {
+        if (stepper.__cc) return;
+        stepper.__cc = true;
+
+        var col = stepper.closest('[data-testid="stColumn"]');
+        if (!col) return;
+        var inp = col.querySelector('input[type="number"]');
+        if (!inp) return;
+
+        var valSpan = stepper.querySelector('.cc-value');
+        var minus   = stepper.querySelector('.cc-minus');
+        var plus    = stepper.querySelector('.cc-plus');
+
+        var row = col.closest('[data-testid="stHorizontalBlock"]');
+        var dot = row ? row.querySelector('.cc-dot') : null;
+
+        var init = Math.round(parseFloat(inp.value) || 0);
+        stepper._ccVal = init;
+        if (init === -1) { showOOS(valSpan); }
+        else             { showCount(valSpan, init); }
+        if (dot) syncDot(dot, init);
+
+        if (dot) {
+            dot.addEventListener('click', function(e) {
+                e.preventDefault();
+                var v = parseFloat(inp.value) || 0;
+                if (v === -1) {
+                    stepper._ccVal = 0;
+                    nativeSet(inp, 0);
+                    syncDot(dot, 0);
+                    showCount(valSpan, 0);
+                } else {
+                    stepper._ccVal = -1;
+                    nativeSet(inp, -1);
+                    syncDot(dot, -1);
+                    showOOS(valSpan);
+                }
+                updateProgress();
+            });
+        }
+
+        minus.addEventListener('click', function(e) {
+            e.preventDefault();
+            var v = parseFloat(inp.value) || 0;
+            if (v <= 0) return;
+            var nv = v - 1;
+            stepper._ccVal = Math.round(nv);
+            nativeSet(inp, nv);
+            showCount(valSpan, Math.round(nv));
+            if (dot) syncDot(dot, Math.round(nv));
+            updateProgress();
+        });
+
+        plus.addEventListener('click', function(e) {
+            e.preventDefault();
+            var v  = parseFloat(inp.value) || 0;
+            var mx = parseFloat(inp.max);
+            var nv;
+            if (v === -1) { nv = 1; }
+            else { nv = isNaN(mx) ? v + 1 : Math.min(mx, v + 1); }
+            stepper._ccVal = Math.round(nv);
+            nativeSet(inp, nv);
+            showCount(valSpan, Math.round(nv));
+            if (dot) syncDot(dot, Math.round(nv));
+            updateProgress();
+        });
+    }
+
+    /* ── Bridge a slider-dot to its hidden OOS number input ── */
+    function bridgeSliderDot(dot) {
+        if (dot.__ccBridged) return;
+        dot.__ccBridged = true;
+
+        var row = dot.closest('[data-testid="stHorizontalBlock"]');
+        if (!row) return;
+
+        var oosInp = row.querySelector('input[type="number"]');
+        if (!oosInp) return;
+
+        var slider = row.querySelector('[data-testid="stSlider"] [role="slider"]');
+
+        /* Sync initial state */
+        var oosVal    = parseFloat(oosInp.value) || 0;
+        var sliderVal = slider ? parseInt(slider.getAttribute('aria-valuenow')) : 0;
+        dot._ccOosVal = oosVal;
+        if (oosVal === -1)       { syncDot(dot, -1); }
+        else if (sliderVal > 0)  { syncDot(dot, sliderVal); }
+
+        dot.addEventListener('click', function(e) {
+            e.preventDefault();
+            var v = parseFloat(oosInp.value) || 0;
+            if (v === -1) {
+                /* un-OOS */
+                dot._ccOosVal = 0;
+                nativeSet(oosInp, 0);
+                var sv = slider ? parseInt(slider.getAttribute('aria-valuenow')) : 0;
+                syncDot(dot, sv > 0 ? sv : 0);
+            } else {
+                /* mark OOS */
+                dot._ccOosVal = -1;
+                nativeSet(oosInp, -1);
+                syncDot(dot, -1);
+            }
+            updateProgress();
+        });
+
+        /* Watch slider value changes to auto-clear OOS and update dot */
+        if (slider) {
+            var sliderObs = new MutationObserver(function() {
+                var sv = parseInt(slider.getAttribute('aria-valuenow'));
+                if (!isNaN(sv) && sv > 0 && parseFloat(oosInp.value) === -1) {
+                    /* Slider moved above 0 → clear OOS */
+                    dot._ccOosVal = 0;
+                    nativeSet(oosInp, 0);
+                }
+                syncDot(dot, parseFloat(oosInp.value) === -1 ? -1 : (sv > 0 ? sv : 0));
+                updateProgress();
+            });
+            sliderObs.observe(slider, {attributes: true, attributeFilter: ['aria-valuenow']});
+        }
+    }
+
+    function bridgeAll() {
+        D.querySelectorAll('.cc-stepper').forEach(bridge);
+        D.querySelectorAll('.cc-slider-dot').forEach(bridgeSliderDot);
+    }
+
+    /* Flush all tracked JS values into the single hidden JSON payload input. */
+    function flushAll() {
+        var payload = {};
+        
+        D.querySelectorAll('.cc-stepper').forEach(function(s) {
+            if (!s.__cc) return;
+            var itemName = s.getAttribute('data-item-name');
+            if (itemName) {
+                payload[itemName] = s._ccVal !== undefined ? s._ccVal : 0;
+            }
+        });
+        
+        D.querySelectorAll('.cc-slider-dot').forEach(function(dot) {
+            if (!dot.__ccBridged) return;
+            var itemName = dot.getAttribute('data-item-name');
+            if (itemName) {
+                var row = dot.closest('[data-testid="stHorizontalBlock"]') || dot.parentNode.parentNode.parentNode;
+                if (!row) return;
+                var slider = row.querySelector('[data-testid="stSlider"] [role="slider"]');
+                var sv = slider ? parseInt(slider.getAttribute('aria-valuenow')) : 0;
+                payload[itemName] = (dot._ccOosVal === -1) ? -1 : (isNaN(sv) ? 0 : sv);
+            }
+        });
+
+        var textInputs = Array.from(D.querySelectorAll('[data-testid="stTextInput"] input'));
+        var payloadInp = textInputs.find(function(i) { 
+            var aria = i.getAttribute('aria-label') || "";
+            return aria.indexOf("payload_data") !== -1;
+        });
+        
+        if (!payloadInp && textInputs.length > 0) {
+            payloadInp = textInputs[textInputs.length - 1];
+        }
+
+        console.log("CC_DEBUG Built Payload:", payload);
+        console.log("CC_DEBUG Found Target Input:", payloadInp);
+
+        if (payloadInp) {
+            var strPayload = JSON.stringify(payload);
+            console.log("CC_DEBUG Writing Str:", strPayload);
+            nativeSet(payloadInp, strPayload);
+        } else {
+            console.error("CC_DEBUG No payload input found");
+        }
+    }
+
+    /* Intercept the submit button click: block it, flush all values into
+       the hidden inputs, then re-click after a short delay so React has
+       time to process the state updates before the form actually submits. */
+    function interceptSubmit() {
+        var btn = D.querySelector('[data-testid="stBaseButton-formSubmit"]');
+        if (!btn || btn._ccIntercepted) return;
+        btn._ccIntercepted = true;
+        btn.addEventListener('click', function(e) {
+            if (btn._ccFlushed) {
+                /* Second click (re-triggered) — let Streamlit handle it */
+                btn._ccFlushed = false;
+                return;
+            }
+            /* First click — block, flush values, then re-click after delay */
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            flushAll();
+            btn._ccFlushed = true;
+            setTimeout(function() { btn.click(); }, 500);
+        }, true); /* capture phase — fires before Streamlit's handler */
+    }
+
+    function setup() {
+        bridgeAll();
+        interceptSubmit();
+        updateProgress();
+    }
+
+    setup(); setTimeout(setup, 250); setTimeout(setup, 700);
+
+    /* Observer bridges new elements AND re-attaches submit interceptor.
+       updateProgress is safe here because it uses requestAnimationFrame. */
+    if (W.__ccN) W.__ccN.disconnect();
+    W.__ccN = new MutationObserver(function() {
+        bridgeAll();
+        interceptSubmit();
+        updateProgress();
+    });
+    W.__ccN.observe(D.body, {childList: true, subtree: true});
+})();
+</script>""", height=0, scrolling=False)
 
 
 # ── SCREEN 3: Review & Submit ─────────────────────────────────────────────────
@@ -647,7 +1106,6 @@ def render_review_screen():
 
     if st.button("Submit Inventory", key="final_submit", type="primary", use_container_width=True):
         now = datetime.now()
-        submitted_at = now.strftime("%Y-%m-%d %-I:%M %p")
         st.session_state.submitted_time = now.strftime("%-I:%M %p")
 
         # Write to Google Sheets
@@ -729,11 +1187,13 @@ def render_success_screen():
 
 
 # ── Router ────────────────────────────────────────────────────────────────────
-screen = st.session_state.screen
-if   screen == "reporting": render_reporting_screen()
-elif screen == "location":  render_location_screen()
-elif screen == "review":    render_review_screen()
-elif screen == "success":   render_success_screen()
+_SCREENS = {
+    "location":  render_location_screen,
+    "reporting": render_reporting_screen,
+    "review":    render_review_screen,
+    "success":   render_success_screen,
+}
+_SCREENS[st.session_state.screen]()
 
 # Sidebar
 st.sidebar.markdown(f"**{APP_TITLE}** {APP_VERSION}")
