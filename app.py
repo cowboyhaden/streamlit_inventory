@@ -7,7 +7,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.6"
+APP_VERSION = "v1.4.10"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -736,25 +736,11 @@ def _inject_stepper_js():
         ).set;
         setter.call(inp, valStr);
 
-        /* Strategy 1: React fiber onChange */
-        var fiberKey = Object.keys(inp).find(function(k) {
-            return k.startsWith('__reactFiber') || k.startsWith('__reactInternalInstance');
-        });
-        if (fiberKey) {
-            var node = inp[fiberKey];
-            while (node) {
-                var props = node.memoizedProps || node.pendingProps;
-                if (props && typeof props.onChange === 'function') {
-                    props.onChange({ target: inp, currentTarget: inp });
-                    return;
-                }
-                node = node.return;
-            }
-        }
-
         /* Trigger React onChange via native events fallback */
         var tracker = inp._valueTracker;
-        if (tracker) tracker.setValue(valStr === '0' ? '1' : '0');
+        if (tracker) {
+            tracker.setValue("");
+        }
         
         inp.dispatchEvent(new Event('input', { bubbles: true }));
         inp.dispatchEvent(new Event('change', { bubbles: true }));
@@ -990,15 +976,9 @@ def _inject_stepper_js():
             payloadInp = textInputs[textInputs.length - 1];
         }
 
-        console.log("CC_DEBUG Built Payload:", payload);
-        console.log("CC_DEBUG Found Target Input:", payloadInp);
-
         if (payloadInp) {
             var strPayload = JSON.stringify(payload);
-            console.log("CC_DEBUG Writing Str:", strPayload);
             nativeSet(payloadInp, strPayload);
-        } else {
-            console.error("CC_DEBUG No payload input found");
         }
     }
 
@@ -1006,7 +986,11 @@ def _inject_stepper_js():
        the hidden inputs, then re-click after a short delay so React has
        time to process the state updates before the form actually submits. */
     function interceptSubmit() {
-        var btn = D.querySelector('[data-testid="stBaseButton-formSubmit"]');
+        var btns = Array.from(D.querySelectorAll('button'));
+        var btn = btns.find(function(b) {
+            return b.textContent && b.textContent.indexOf("Submit Inventory") !== -1;
+        });
+
         if (!btn || btn._ccIntercepted) return;
         btn._ccIntercepted = true;
         btn.addEventListener('click', function(e) {
