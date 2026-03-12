@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.5.1"
+APP_VERSION = "v1.5.3"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -64,9 +64,9 @@ def _build_categories_from_records(records: list) -> list[dict]:
         item_name = str(row.get("Item", "")).strip()
         unit      = str(row.get("Unit", "")).strip()
         try:
-            max_inv = int(row.get("Max Inventory", 0) or 0)
+            max_inv = 99  # User can enter 0-99; Max Inventory column is ignored for capping
         except (ValueError, TypeError):
-            max_inv = 0
+            max_inv = 99
             
         try:
             w_stock = int(row.get("Warehouse Stock", 1))
@@ -784,7 +784,7 @@ def render_reporting_screen():
                             st.number_input(
                                 item["name"],
                                 min_value=0 if is_disabled else -1,
-                                max_value=0 if is_disabled else item["max"],
+                                max_value=0 if is_disabled else 99,
                                 step=1,
                                 key=fkey,
                                 disabled=is_disabled,
@@ -1033,8 +1033,7 @@ def _inject_stepper_js():
             var raw = valSpan.value.replace(/[^0-9]/g, '');
             var v = parseInt(raw, 10);
             if (isNaN(v)) v = 0;
-            var mx = parseFloat(inp.max);
-            if (!isNaN(mx) && v > mx) v = Math.round(mx);
+            if (v > 99) v = 99;
             stepper._ccVal = v;
             nativeSet(inp, v);
             showCount(valSpan, v);
