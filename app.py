@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.18"
+APP_VERSION = "v1.4.26"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -170,12 +170,11 @@ def _inject_css():
     """Inject custom CSS — mobile-first, warm design."""
     st.markdown(f"""
 <style>
-    /* Prevent Streamlit overflow from breaking position: sticky */
+    /* Base layout constraints */
     .stApp {{
         background-color: {COLOR_BG_PAGE};
         max-width: 402px;
         margin: 0 auto;
-        overflow: visible !important;
     }}
     .stApp > header {{
         background-color: transparent !important;
@@ -185,7 +184,6 @@ def _inject_css():
     .block-container {{
         padding: 1rem 1.2rem 6rem 1.2rem;
         max-width: 402px;
-        overflow: visible !important;
     }}
 
     /* ── Location card buttons (secondary = default) ── */
@@ -234,13 +232,14 @@ def _inject_css():
         display: none !important;
     }}
 
-    /* ── Custom HTML stepper (rendered via st.markdown) ── */
+    /* ── Custom Stepper (JS injects value) ── */
     .cc-stepper {{
         display: flex;
         align-items: center;
         justify-content: flex-end;
-        gap: 6px;
-        height: 44px;
+        gap: 12px;
+        padding: 4px 0;
+        min-height: 44px;
     }}
     .cc-minus, .cc-plus {{
         display: inline-flex;
@@ -288,6 +287,7 @@ def _inject_css():
         justify-content: center;
         width: 22px;
         height: 22px;
+        margin-top: 7px;
         border-radius: 50%;
         background: transparent;
         border: 2px solid {COLOR_BORDER_SUBTLE};
@@ -597,10 +597,28 @@ def render_reporting_screen():
     with st.form("inventory_form"):
         # ── Progress bar (live-updated by JS, no server round-trips) ─────────
         total_items = sum(len(cat["items"]) for cat in CATEGORIES)
+        
+        # Inject CSS to make the parent Streamlit container sticky, bypassing wrapper limits
+        st.markdown(f"""
+        <style>
+            div[data-testid="stVerticalBlock"] > div.element-container:has(#cc-pb-container) {{
+                position: -webkit-sticky;
+                position: sticky;
+                top: 0rem;
+                z-index: 999999;
+                background-color: {COLOR_BG_PAGE};
+            }}
+            #cc-pb-container {{
+                padding: 15px 0 10px 0;
+                margin-bottom: 20px;
+                margin-top: -15px;
+                border-bottom: 1px solid {COLOR_BORDER_SUBTLE};
+            }}
+        </style>
+        """, unsafe_allow_html=True)
+        
         st.markdown(
-            f"<div style='position: -webkit-sticky; position: sticky; top: 0rem; z-index: 999999; "
-            f"background: {COLOR_BG_PAGE}; padding: 15px 0 10px 0; margin-bottom: 20px; "
-            f"margin-top: -15px; border-bottom: 1px solid {COLOR_BORDER_SUBTLE};'>"
+            f"<div id='cc-pb-container'>"
             f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>"
             f"<span style='font-size:12px;color:{COLOR_TEXT_SECONDARY};font-weight:500;'>Items reported</span>"
             f"<span id='cc-pl' style='font-size:12px;font-weight:700;color:{COLOR_TEXT_PRIMARY};'>0 / {total_items}</span>"
@@ -625,16 +643,25 @@ def render_reporting_screen():
                         else:
                             dot_html = ""
                         st.markdown(
-                            f"<div style='display:flex;align-items:center;min-height:44px;gap:8px;padding:4px 0;'>"
+                            f"<div style='display:flex;align-items:flex-start;min-height:44px;gap:8px;padding:4px 0;'>"
                             f"{dot_html}"
                             f"<span style='font-size:14px;font-weight:500;color:{COLOR_TEXT_PRIMARY};"
-                            f"line-height:1.2; word-break:break-word;'>"
+                            f"line-height:1.4; word-break:break-word; margin-top:8px;'>"
                             f"{item['name']}</span></div>",
                             unsafe_allow_html=True,
                         )
                     with inp_col:
                         fkey = f"inp_{cat_idx}_{item_idx}"
                         if item["input"] == "stepper":
+                            # Visible HTML stepper (JS bridges clicks → hidden input)
+                            st.markdown(
+                                f'<div class="cc-stepper" data-item-name="{item["name"]}">'
+                                '<span class="cc-minus">&minus;</span>'
+                                '<span class="cc-value">0</span>'
+                                '<span class="cc-plus">+</span>'
+                                '</div>',
+                                unsafe_allow_html=True,
+                            )
                             # Hidden data widget (read by st.form on submit)
                             # min_value=-1 allows -1 as OOS sentinel
                             st.number_input(
@@ -645,16 +672,15 @@ def render_reporting_screen():
                                 key=fkey,
                                 label_visibility="collapsed",
                             )
-                            # Visible HTML stepper (JS bridges clicks → hidden input)
-                            st.markdown(
-                                f'<div class="cc-stepper" data-item-name="{item["name"]}">'
-                                '<span class="cc-minus">&minus;</span>'
-                                '<span class="cc-value">0</span>'
-                                '<span class="cc-plus">+</span>'
-                                '</div>',
-                                unsafe_allow_html=True,
-                            )
                         elif item["input"] == "slider":
+                            st.slider(
+                                item["name"],
+                                min_value=0,
+                                max_value=int(item["max"]),
+                                step=1,
+                                key=fkey,
+                                label_visibility="collapsed",
+                            )
                             # Hidden OOS flag (-1 = OOS, 0 = not OOS)
                             st.number_input(
                                 f"{item['name']} OOS",
@@ -662,14 +688,6 @@ def render_reporting_screen():
                                 max_value=0,
                                 step=1,
                                 key=f"oos_{cat_idx}_{item_idx}",
-                                label_visibility="collapsed",
-                            )
-                            st.slider(
-                                item["name"],
-                                min_value=0,
-                                max_value=int(item["max"]),
-                                step=1,
-                                key=fkey,
                                 label_visibility="collapsed",
                             )
 
