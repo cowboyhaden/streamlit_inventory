@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.5.0"
+APP_VERSION = "v1.5.1"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -337,7 +337,7 @@ def _inject_css():
     }}
     .cc-value:focus {{
         outline: none;
-        background-color: {COLOR_BG_DARK};
+        background-color: #EDE3D5;
         border-radius: 4px;
     }}
     .cc-value.oos {{
@@ -774,7 +774,7 @@ def render_reporting_screen():
                             st.markdown(
                                 f'<div class="cc-stepper" data-item-name="{item["name"]}" style="{"opacity:0.4; pointer-events:none;" if is_disabled else ""}">'
                                 '<span class="cc-minus">&minus;</span>'
-                                '<input type="tel" class="cc-value" value="0" />'
+                                '<span class="cc-value">0</span>'
                                 '<span class="cc-plus">+</span>'
                                 '</div>',
                                 unsafe_allow_html=True,
@@ -963,22 +963,16 @@ def _inject_stepper_js():
     }
 
     /* Show normal count in stepper */
-    function showCount(valSpan, n) {
-        if (valSpan.tagName.toLowerCase() === 'input') {
-            valSpan.value = String(n);
-        } else {
-            valSpan.textContent = String(n);
-        }
-        valSpan.classList.remove('oos');
+    function showCount(el, n) {
+        if (el.tagName === 'INPUT') { el.value = String(n); }
+        else { el.textContent = String(n); }
+        el.classList.remove('oos');
     }
     /* Show OOS label in stepper */
-    function showOOS(valSpan) {
-        if (valSpan.tagName.toLowerCase() === 'input') {
-            valSpan.value = 'OOS';
-        } else {
-            valSpan.textContent = 'OOS';
-        }
-        valSpan.classList.add('oos');
+    function showOOS(el) {
+        if (el.tagName === 'INPUT') { el.value = 'OOS'; }
+        else { el.textContent = 'OOS'; }
+        el.classList.add('oos');
     }
 
     /* ── Bridge a stepper element to its hidden number input ── */
@@ -991,9 +985,19 @@ def _inject_stepper_js():
         var inp = col.querySelector('input[type="number"]');
         if (!inp) return;
 
-        var valSpan = stepper.querySelector('.cc-value');
-        var minus   = stepper.querySelector('.cc-minus');
-        var plus    = stepper.querySelector('.cc-plus');
+        /* Dynamically replace the <span class="cc-value"> with a real <input> */
+        var origSpan = stepper.querySelector('.cc-value');
+        var valInput = D.createElement('input');
+        valInput.type = 'tel';
+        valInput.className = origSpan.className;
+        valInput.value = origSpan.textContent || '0';
+        valInput.setAttribute('inputmode', 'numeric');
+        valInput.setAttribute('pattern', '[0-9]*');
+        origSpan.parentNode.replaceChild(valInput, origSpan);
+        var valSpan = valInput;  /* Use valSpan name for consistency */
+
+        var minus = stepper.querySelector('.cc-minus');
+        var plus  = stepper.querySelector('.cc-plus');
 
         var row = col.closest('[data-testid="stHorizontalBlock"]');
         var dot = row ? row.querySelector('.cc-dot') : null;
@@ -1023,39 +1027,34 @@ def _inject_stepper_js():
             });
         }
 
-        /* Support manual typing inside the numeric input */
-        if (valSpan.tagName.toLowerCase() === 'input') {
-            /* On input: sanitize and live-update UI but wait for blur to push React state (performance) */
-            valSpan.addEventListener('input', function(e) {
-                if (valSpan.value.toUpperCase() === 'OOS') return;
-                var raw = valSpan.value.replace(/[^0-9]/g, '');
-                if (raw === '') return; /* Let them temporarily delete it */
-            });
+        /* ── Manual keypad typing support ── */
+        var finalizeInput = function() {
+            if (valSpan.value.toUpperCase() === 'OOS') return;
+            var raw = valSpan.value.replace(/[^0-9]/g, '');
+            var v = parseInt(raw, 10);
+            if (isNaN(v)) v = 0;
+            var mx = parseFloat(inp.max);
+            if (!isNaN(mx) && v > mx) v = Math.round(mx);
+            stepper._ccVal = v;
+            nativeSet(inp, v);
+            showCount(valSpan, v);
+            if (dot) syncDot(dot, v);
+            updateProgress();
+        };
 
-            /* On blur or enter key: finalize and push to React */
-            var finalizeInput = function() {
-                if (valSpan.value.toUpperCase() === 'OOS') return;
-                var v = parseInt(valSpan.value.replace(/[^0-9]/g, ''), 10);
-                if (isNaN(v)) v = 0;
-                
-                var mx = parseFloat(inp.max);
-                if (!isNaN(mx) && v > mx) v = mx;
+        valSpan.addEventListener('focus', function() {
+            /* Select all text on focus so the user can immediately type over it */
+            setTimeout(function() { valSpan.select(); }, 0);
+        });
 
-                stepper._ccVal = v;
-                nativeSet(inp, v);
-                showCount(valSpan, v);
-                if (dot) syncDot(dot, v);
-                updateProgress();
-            };
+        valSpan.addEventListener('blur', finalizeInput);
 
-            valSpan.addEventListener('blur', finalizeInput);
-            valSpan.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    valSpan.blur();
-                }
-            });
-        }
+        valSpan.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                valSpan.blur();
+            }
+        });
 
         minus.addEventListener('click', function(e) {
             e.preventDefault();
