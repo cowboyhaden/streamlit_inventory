@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.27"
+APP_VERSION = "v1.4.31"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -67,6 +67,24 @@ def _build_categories_from_records(records: list) -> list[dict]:
             max_inv = int(row.get("Max Inventory", 0) or 0)
         except (ValueError, TypeError):
             max_inv = 0
+            
+        try:
+            w_stock = int(row.get("Warehouse Stock", 1))
+        except (ValueError, TypeError):
+            w_stock = 1
+
+        try:
+            show_town = int(row.get("Show TOWN", 1))
+        except (ValueError, TypeError):
+            show_town = 1
+        try:
+            show_vill = int(row.get("Show VILL", 1))
+        except (ValueError, TypeError):
+            show_vill = 1
+        try:
+            show_bs = int(row.get("Show BS", 1))
+        except (ValueError, TypeError):
+            show_bs = 1
 
         if not cat_name or not item_name:
             continue
@@ -83,6 +101,13 @@ def _build_categories_from_records(records: list) -> list[dict]:
                 "max":     10.0,
                 "step":    1.0,
                 "default": 0.0,
+                "warehouse_stock": w_stock,
+                "show_locs": {
+                    "Town Square": show_town,
+                    "Teton Village": show_vill,
+                    "Big Sky": show_bs,
+                    "BS": show_bs,
+                }
             }
         else:
             item = {
@@ -91,11 +116,35 @@ def _build_categories_from_records(records: list) -> list[dict]:
                 "unit":    unit,
                 "max":     max_inv,
                 "default": 0,
+                "warehouse_stock": w_stock,
+                "show_locs": {
+                    "Town Square": show_town,
+                    "Teton Village": show_vill,
+                    "Big Sky": show_bs,
+                    "BS": show_bs,
+                }
             }
 
         categories[cat_name]["items"].append(item)
 
     return list(categories.values())
+
+
+def get_active_categories(all_cats: list, loc_name: str) -> list:
+    """Return a copied list of categories filtered by the active location's show flag."""
+    filtered = []
+    for cat in all_cats:
+        active = [
+            i for i in cat["items"] 
+            if i.get("show_locs", {}).get(loc_name, 1) == 1
+        ]
+        if active:
+            filtered.append({
+                "name": cat["name"],
+                "icon": cat["icon"],
+                "items": active
+            })
+    return filtered
 
 
 @st.cache_resource
@@ -143,7 +192,7 @@ st.set_page_config(
 )
 
 # Load categories from the Items tab in Google Sheets (cached for the session)
-@st.cache_data
+@st.cache_data(ttl=300)
 def get_categories():
     gc      = _get_gspread_client()
     ws      = gc.open_by_key(SPREADSHEET_ID).worksheet(ITEMS_WORKSHEET_NAME)
@@ -300,6 +349,12 @@ def _inject_css():
         box-sizing: border-box;
         transition: background 0.15s ease, border-color 0.15s ease;
     }}
+    .cc-dot-disabled {{
+        border-color: #E0E0E0 !important;
+        background: #F5F5F5 !important;
+        cursor: not-allowed !important;
+        opacity: 0.5;
+    }}
     /* Invisible ::after expands tap target to ~44×44 without affecting layout */
     .cc-dot::after {{
         content: '';
@@ -368,6 +423,28 @@ def _inject_css():
     /* Prevent columns from stacking on narrow viewports */
     div[data-testid="stHorizontalBlock"] > div {{
         min-width: 0 !important;
+    }}
+
+    /* ── Slider OOS overlay ── */
+    div[data-testid="stSlider"].cc-slider-oos {{
+        opacity: 0.4 !important;
+        position: relative !important;
+    }}
+    div[data-testid="stSlider"].cc-slider-oos::after {{
+        content: 'OUT OF STOCK';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-weight: 800;
+        font-size: 12px;
+        color: #CC6B5A;
+        background: {COLOR_BG_PAGE};
+        padding: 2px 6px;
+        border-radius: 4px;
+        pointer-events: none;
+        box-shadow: 0 0 4px rgba(0,0,0,0.1);
+        z-index: 10;
     }}
 
     #MainMenu {{ visibility: hidden; }}
@@ -584,8 +661,10 @@ def render_reporting_screen():
         )
 
     # Reset form widget keys on a fresh session (prevents stale values)
+    active_categories = get_active_categories(CATEGORIES, st.session_state.location)
+
     if not st.session_state.inventory:
-        for ci, cat in enumerate(CATEGORIES):
+        for ci, cat in enumerate(active_categories):
             for ii, item in enumerate(cat["items"]):
                 st.session_state[f"inp_{ci}_{ii}"] = (
                     float(item["default"]) if item["input"] == "slider" else int(item["default"])
@@ -596,7 +675,7 @@ def render_reporting_screen():
     # ── Form: all inputs are client-side until Submit ─────────────────────
     with st.form("inventory_form"):
         # ── Progress bar (live-updated by JS, no server round-trips) ─────────
-        total_items = sum(len(cat["items"]) for cat in CATEGORIES)
+        total_items = sum(len(cat["items"]) for cat in active_categories)
         
         # Inject CSS to make the parent Streamlit container sticky, bypassing wrapper limits
         st.markdown(f"""
@@ -630,24 +709,31 @@ def render_reporting_screen():
             unsafe_allow_html=True,
         )
 
-        for cat_idx, cat in enumerate(CATEGORIES):
+        for cat_idx, cat in enumerate(active_categories):
             count = len(cat["items"])
             with st.expander(f"{cat['icon']} **{cat['name']}** `{count}`", expanded=True):
                 for item_idx, item in enumerate(cat["items"]):
                     name_col, inp_col = st.columns([3, 2])
                     with name_col:
-                        if item["input"] == "stepper":
-                            dot_html = f'<span class="cc-dot" data-item-name="{item["name"]}"></span>'
-                        elif item["input"] == "slider":
-                            dot_html = f'<span class="cc-dot cc-slider-dot" data-item-name="{item["name"]}"></span>'
-                        else:
-                            dot_html = ""
+                        is_disabled = (item.get("warehouse_stock", 1) == 0)
+                        dim_style = "; opacity: 0.5;" if is_disabled else ""
+                        strike_open = "<del>" if is_disabled else ""
+                        strike_close = "</del>" if is_disabled else ""
+                        
+                        dot_class = "cc-dot" 
+                        if item["input"] == "slider":
+                            dot_class += " cc-slider-dot"
+                        if is_disabled:
+                            dot_class += " cc-dot-disabled"
+                            
+                        dot_html = f'<span class="{dot_class}" data-item-name="{item["name"]}"></span>'
+                        
                         st.markdown(
-                            f"<div style='display:flex;align-items:flex-start;min-height:44px;gap:8px;padding:4px 0;'>"
+                            f"<div style='display:flex;align-items:flex-start;min-height:44px;gap:8px;padding:4px 0{dim_style}'>"
                             f"{dot_html}"
                             f"<span style='font-size:14px;font-weight:500;color:{COLOR_TEXT_PRIMARY};"
                             f"line-height:1.4; word-break:break-word; margin-top:8px;'>"
-                            f"{item['name']}</span></div>",
+                            f"{strike_open}{item['name']}{strike_close}</span></div>",
                             unsafe_allow_html=True,
                         )
                     with inp_col:
@@ -655,7 +741,7 @@ def render_reporting_screen():
                         if item["input"] == "stepper":
                             # Visible HTML stepper (JS bridges clicks → hidden input)
                             st.markdown(
-                                f'<div class="cc-stepper" data-item-name="{item["name"]}">'
+                                f'<div class="cc-stepper" data-item-name="{item["name"]}" style="{"opacity:0.4; pointer-events:none;" if is_disabled else ""}">'
                                 '<span class="cc-minus">&minus;</span>'
                                 '<span class="cc-value">0</span>'
                                 '<span class="cc-plus">+</span>'
@@ -666,28 +752,31 @@ def render_reporting_screen():
                             # min_value=-1 allows -1 as OOS sentinel
                             st.number_input(
                                 item["name"],
-                                min_value=-1,
-                                max_value=item["max"],
+                                min_value=0 if is_disabled else -1,
+                                max_value=0 if is_disabled else item["max"],
                                 step=1,
                                 key=fkey,
+                                disabled=is_disabled,
                                 label_visibility="collapsed",
                             )
                         elif item["input"] == "slider":
                             st.slider(
                                 item["name"],
                                 min_value=0,
-                                max_value=int(item["max"]),
+                                max_value=0 if is_disabled else int(item["max"]),
                                 step=1,
                                 key=fkey,
+                                disabled=is_disabled,
                                 label_visibility="collapsed",
                             )
                             # Hidden OOS flag (-1 = OOS, 0 = not OOS)
                             st.number_input(
                                 f"{item['name']} OOS",
-                                min_value=-1,
+                                min_value=0 if is_disabled else -1,
                                 max_value=0,
                                 step=1,
                                 key=f"oos_{cat_idx}_{item_idx}",
+                                disabled=is_disabled,
                                 label_visibility="collapsed",
                             )
 
@@ -707,7 +796,7 @@ def render_reporting_screen():
             payload = {}
 
         # Pass 1: read all form widget values → inventory dict
-        for ci, cat in enumerate(CATEGORIES):
+        for ci, cat in enumerate(active_categories):
             for ii, item in enumerate(cat["items"]):
                 val = payload.get(item["name"])
                 if val is None:
@@ -724,7 +813,7 @@ def render_reporting_screen():
         # Pass 2: items at zero without confirmed OOS need the dialog
         unreported = [
             item["name"]
-            for cat in CATEGORIES
+            for cat in active_categories
             for item in cat["items"]
             if item["name"] not in st.session_state.confirmed_zero
             and int(float(st.session_state.inventory.get(item["name"], item["default"]) or 0)) == 0
@@ -926,14 +1015,20 @@ def _inject_stepper_js():
         var oosInp = row.querySelector('input[type="number"]');
         if (!oosInp) return;
 
-        var slider = row.querySelector('[data-testid="stSlider"] [role="slider"]');
+        var sliderContainer = row.querySelector('[data-testid="stSlider"]');
+        var slider = sliderContainer ? sliderContainer.querySelector('[role="slider"]') : null;
 
         /* Sync initial state */
         var oosVal    = parseFloat(oosInp.value) || 0;
         var sliderVal = slider ? parseInt(slider.getAttribute('aria-valuenow')) : 0;
         dot._ccOosVal = oosVal;
-        if (oosVal === -1)       { syncDot(dot, -1); }
-        else if (sliderVal > 0)  { syncDot(dot, sliderVal); }
+        if (oosVal === -1)       { 
+            syncDot(dot, -1); 
+            if (sliderContainer) sliderContainer.classList.add('cc-slider-oos');
+        }
+        else if (sliderVal > 0)  { 
+            syncDot(dot, sliderVal); 
+        }
 
         dot.addEventListener('click', function(e) {
             e.preventDefault();
@@ -944,11 +1039,13 @@ def _inject_stepper_js():
                 nativeSet(oosInp, 0);
                 var sv = slider ? parseInt(slider.getAttribute('aria-valuenow')) : 0;
                 syncDot(dot, sv > 0 ? sv : 0);
+                if (sliderContainer) sliderContainer.classList.remove('cc-slider-oos');
             } else {
                 /* mark OOS */
                 dot._ccOosVal = -1;
                 nativeSet(oosInp, -1);
                 syncDot(dot, -1);
+                if (sliderContainer) sliderContainer.classList.add('cc-slider-oos');
             }
             updateProgress();
         });
@@ -961,6 +1058,7 @@ def _inject_stepper_js():
                     /* Slider moved above 0 → clear OOS */
                     dot._ccOosVal = 0;
                     nativeSet(oosInp, 0);
+                    if (sliderContainer) sliderContainer.classList.remove('cc-slider-oos');
                 }
                 syncDot(dot, parseFloat(oosInp.value) === -1 ? -1 : (sv > 0 ? sv : 0));
                 updateProgress();
@@ -1087,7 +1185,8 @@ def render_review_screen():
     )
     st.markdown("")
 
-    for cat in CATEGORIES:
+    active_categories = get_active_categories(CATEGORIES, st.session_state.location)
+    for cat in active_categories:
         st.markdown(
             f"<p style='font-size:14px; font-weight:700; color:{COLOR_TEXT_PRIMARY}; margin-bottom:0.2rem;'>"
             f"{cat['icon']} {cat['name']}</p>",
@@ -1130,7 +1229,7 @@ def render_review_screen():
             manager_name=st.session_state.manager_name,
             now_dt=now,
             inventory=st.session_state.inventory,
-            categories=CATEGORIES,
+            categories=active_categories,
             confirmed_zero=st.session_state.confirmed_zero,
         )
         st.session_state.sheets_status = (ok, err)
