@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.13"
+APP_VERSION = "v1.4.18"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -170,16 +170,22 @@ def _inject_css():
     """Inject custom CSS — mobile-first, warm design."""
     st.markdown(f"""
 <style>
+    /* Prevent Streamlit overflow from breaking position: sticky */
     .stApp {{
         background-color: {COLOR_BG_PAGE};
         max-width: 402px;
         margin: 0 auto;
+        overflow: visible !important;
+    }}
+    .stApp > header {{
+        background-color: transparent !important;
     }}
     section[data-testid="stSidebar"] {{ display: none; }}
-    header[data-testid="stHeader"]   {{ background-color: {COLOR_BG_PAGE}; }}
+    header[data-testid="stHeader"]   {{ display: none !important; }}
     .block-container {{
         padding: 1rem 1.2rem 6rem 1.2rem;
         max-width: 402px;
+        overflow: visible !important;
     }}
 
     /* ── Location card buttons (secondary = default) ── */
@@ -587,24 +593,25 @@ def render_reporting_screen():
                 if item["input"] == "slider":
                     st.session_state[f"oos_{ci}_{ii}"] = 0
 
-    # ── Progress bar (live-updated by JS, no server round-trips) ─────────
-    total_items = sum(len(cat["items"]) for cat in CATEGORIES)
-    st.markdown(
-        f"<div style='position: sticky; top: 0; z-index: 99; background: {COLOR_BG_PAGE}; "
-        f"padding: 10px 0; margin-bottom: 1rem; margin-top: -10px;'>"
-        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>"
-        f"<span style='font-size:12px;color:{COLOR_TEXT_SECONDARY};font-weight:500;'>Items reported</span>"
-        f"<span id='cc-pl' style='font-size:12px;font-weight:700;color:{COLOR_TEXT_PRIMARY};'>0 / {total_items}</span>"
-        f"</div>"
-        f"<div style='background:{COLOR_BORDER_SUBTLE};border-radius:3px;height:6px;'>"
-        f"<div id='cc-pb' style='background:{COLOR_ACCENT_GREEN};border-radius:3px;height:6px;width:0%;transition:width 0.3s ease;'></div>"
-        f"</div>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
     # ── Form: all inputs are client-side until Submit ─────────────────────
     with st.form("inventory_form"):
+        # ── Progress bar (live-updated by JS, no server round-trips) ─────────
+        total_items = sum(len(cat["items"]) for cat in CATEGORIES)
+        st.markdown(
+            f"<div style='position: -webkit-sticky; position: sticky; top: 0rem; z-index: 999999; "
+            f"background: {COLOR_BG_PAGE}; padding: 15px 0 10px 0; margin-bottom: 20px; "
+            f"margin-top: -15px; border-bottom: 1px solid {COLOR_BORDER_SUBTLE};'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>"
+            f"<span style='font-size:12px;color:{COLOR_TEXT_SECONDARY};font-weight:500;'>Items reported</span>"
+            f"<span id='cc-pl' style='font-size:12px;font-weight:700;color:{COLOR_TEXT_PRIMARY};'>0 / {total_items}</span>"
+            f"</div>"
+            f"<div style='background:{COLOR_BORDER_SUBTLE};border-radius:3px;height:6px;'>"
+            f"<div id='cc-pb' style='background:{COLOR_ACCENT_GREEN};border-radius:3px;height:6px;width:0%;transition:width 0.3s ease;'></div>"
+            f"</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
         for cat_idx, cat in enumerate(CATEGORIES):
             count = len(cat["items"])
             with st.expander(f"{cat['icon']} **{cat['name']}** `{count}`", expanded=True):
