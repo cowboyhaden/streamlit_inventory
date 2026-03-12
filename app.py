@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.31"
+APP_VERSION = "v1.5.0"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -321,10 +321,29 @@ def _inject_css():
         color: {COLOR_TEXT_PRIMARY};
         text-align: center;
         min-width: 28px;
+        width: 40px;
+        background: transparent;
+        border: none;
+        outline: none;
+        padding: 0;
+        margin: 0;
+        appearance: textfield;
+        -moz-appearance: textfield;
+    }}
+    .cc-value::-webkit-inner-spin-button, 
+    .cc-value::-webkit-outer-spin-button {{ 
+        -webkit-appearance: none; 
+        margin: 0; 
+    }}
+    .cc-value:focus {{
+        outline: none;
+        background-color: {COLOR_BG_DARK};
+        border-radius: 4px;
     }}
     .cc-value.oos {{
-        font-size: 12px;
-        color: #CC6B5A;
+        font-size: 13px !important;
+        color: #CC6B5A !important;
+        font-weight: 800 !important;
     }}
 
     /* ── OOS dot (left of item name) ── */
@@ -660,17 +679,29 @@ def render_reporting_screen():
             unsafe_allow_html=True,
         )
 
-    # Reset form widget keys on a fresh session (prevents stale values)
+    # Ensure form widget keys exist whether it's a fresh session or returning from review
     active_categories = get_active_categories(CATEGORIES, st.session_state.location)
 
-    if not st.session_state.inventory:
-        for ci, cat in enumerate(active_categories):
-            for ii, item in enumerate(cat["items"]):
-                st.session_state[f"inp_{ci}_{ii}"] = (
-                    float(item["default"]) if item["input"] == "slider" else int(item["default"])
-                )
-                if item["input"] == "slider":
-                    st.session_state[f"oos_{ci}_{ii}"] = 0
+    for ci, cat in enumerate(active_categories):
+        for ii, item in enumerate(cat["items"]):
+            fkey = f"inp_{ci}_{ii}"
+            ooskey = f"oos_{ci}_{ii}"
+            name = item["name"]
+            
+            if fkey not in st.session_state:
+                if name in st.session_state.confirmed_zero:
+                    if item["input"] == "slider":
+                        st.session_state[fkey] = 0.0
+                        st.session_state[ooskey] = -1
+                    else:
+                        st.session_state[fkey] = -1
+                else:
+                    val = st.session_state.inventory.get(name, item["default"]) if st.session_state.inventory else item["default"]
+                    if item["input"] == "slider":
+                        st.session_state[fkey] = float(val)
+                        st.session_state[ooskey] = 0
+                    else:
+                        st.session_state[fkey] = int(val)
 
     # ── Form: all inputs are client-side until Submit ─────────────────────
     with st.form("inventory_form"):
@@ -743,7 +774,7 @@ def render_reporting_screen():
                             st.markdown(
                                 f'<div class="cc-stepper" data-item-name="{item["name"]}" style="{"opacity:0.4; pointer-events:none;" if is_disabled else ""}">'
                                 '<span class="cc-minus">&minus;</span>'
-                                '<span class="cc-value">0</span>'
+                                '<input type="tel" class="cc-value" value="0" />'
                                 '<span class="cc-plus">+</span>'
                                 '</div>',
                                 unsafe_allow_html=True,
@@ -780,35 +811,42 @@ def render_reporting_screen():
                                 label_visibility="collapsed",
                             )
 
-        st.text_input("payload_data", key="inventory_payload", label_visibility="collapsed")
-        
         submitted = st.form_submit_button(
             "Submit Inventory", type="primary", use_container_width=True,
         )
 
     # ── Handle form submission ────────────────────────────────────────────
     if submitted:
-        # Parse the JSON payload from the hidden input
-        try:
-            payload_str = st.session_state.get("inventory_payload", "{}")
-            payload = json.loads(payload_str) if payload_str else {}
-        except Exception:
-            payload = {}
-
-        # Pass 1: read all form widget values → inventory dict
+        # Pass 1: read all form widget values → inventory dict via their native Session State keys
         for ci, cat in enumerate(active_categories):
             for ii, item in enumerate(cat["items"]):
-                val = payload.get(item["name"])
+                fkey = f"inp_{ci}_{ii}"
+                ooskey = f"oos_{ci}_{ii}"
+                
+                # Fetch the value directly from the hidden Streamlit widget that was updated via JS nativeSet
+                val = st.session_state.get(fkey)
                 if val is None:
-                    # Fallback to session state defaults or slider
-                    val = st.session_state.get(f"inp_{ci}_{ii}", item["default"])
+                    val = item["default"]
 
-                if int(float(val)) == -1:
-                    # OOS dot was tapped → confirmed OOS
-                    st.session_state.confirmed_zero.add(item["name"])
-                    st.session_state.inventory[item["name"]] = 0
+                # OOS Evaluation depends on Stepper vs Slider logic
+                if item["input"] == "slider":
+                    oos_val = st.session_state.get(ooskey, 0)
+                    if oos_val == -1:
+                        st.session_state.confirmed_zero.add(item["name"])
+                        st.session_state.inventory[item["name"]] = 0
+                        continue
+                    else:
+                        st.session_state.confirmed_zero.discard(item["name"])
                 else:
-                    st.session_state.inventory[item["name"]] = val
+                    if int(float(val)) == -1:
+                        st.session_state.confirmed_zero.add(item["name"])
+                        st.session_state.inventory[item["name"]] = 0
+                        continue
+                    else:
+                        st.session_state.confirmed_zero.discard(item["name"])
+
+                # Normal numerical value
+                st.session_state.inventory[item["name"]] = val
 
         # Pass 2: items at zero without confirmed OOS need the dialog
         unreported = [
@@ -926,12 +964,20 @@ def _inject_stepper_js():
 
     /* Show normal count in stepper */
     function showCount(valSpan, n) {
-        valSpan.textContent = String(n);
+        if (valSpan.tagName.toLowerCase() === 'input') {
+            valSpan.value = String(n);
+        } else {
+            valSpan.textContent = String(n);
+        }
         valSpan.classList.remove('oos');
     }
     /* Show OOS label in stepper */
     function showOOS(valSpan) {
-        valSpan.textContent = 'OOS';
+        if (valSpan.tagName.toLowerCase() === 'input') {
+            valSpan.value = 'OOS';
+        } else {
+            valSpan.textContent = 'OOS';
+        }
         valSpan.classList.add('oos');
     }
 
@@ -974,6 +1020,40 @@ def _inject_stepper_js():
                     showOOS(valSpan);
                 }
                 updateProgress();
+            });
+        }
+
+        /* Support manual typing inside the numeric input */
+        if (valSpan.tagName.toLowerCase() === 'input') {
+            /* On input: sanitize and live-update UI but wait for blur to push React state (performance) */
+            valSpan.addEventListener('input', function(e) {
+                if (valSpan.value.toUpperCase() === 'OOS') return;
+                var raw = valSpan.value.replace(/[^0-9]/g, '');
+                if (raw === '') return; /* Let them temporarily delete it */
+            });
+
+            /* On blur or enter key: finalize and push to React */
+            var finalizeInput = function() {
+                if (valSpan.value.toUpperCase() === 'OOS') return;
+                var v = parseInt(valSpan.value.replace(/[^0-9]/g, ''), 10);
+                if (isNaN(v)) v = 0;
+                
+                var mx = parseFloat(inp.max);
+                if (!isNaN(mx) && v > mx) v = mx;
+
+                stepper._ccVal = v;
+                nativeSet(inp, v);
+                showCount(valSpan, v);
+                if (dot) syncDot(dot, v);
+                updateProgress();
+            };
+
+            valSpan.addEventListener('blur', finalizeInput);
+            valSpan.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    valSpan.blur();
+                }
             });
         }
 
@@ -1073,44 +1153,7 @@ def _inject_stepper_js():
     }
 
     /* Flush all tracked JS values into the single hidden JSON payload input. */
-    function flushAll() {
-        var payload = {};
-        
-        D.querySelectorAll('.cc-stepper').forEach(function(s) {
-            if (!s.__cc) return;
-            var itemName = s.getAttribute('data-item-name');
-            if (itemName) {
-                payload[itemName] = s._ccVal !== undefined ? s._ccVal : 0;
-            }
-        });
-        
-        D.querySelectorAll('.cc-slider-dot').forEach(function(dot) {
-            if (!dot.__ccBridged) return;
-            var itemName = dot.getAttribute('data-item-name');
-            if (itemName) {
-                var row = dot.closest('[data-testid="stHorizontalBlock"]') || dot.parentNode.parentNode.parentNode;
-                if (!row) return;
-                var slider = row.querySelector('[data-testid="stSlider"] [role="slider"]');
-                var sv = slider ? parseInt(slider.getAttribute('aria-valuenow')) : 0;
-                payload[itemName] = (dot._ccOosVal === -1) ? -1 : (isNaN(sv) ? 0 : sv);
-            }
-        });
-
-        var textInputs = Array.from(D.querySelectorAll('[data-testid="stTextInput"] input'));
-        var payloadInp = textInputs.find(function(i) { 
-            var aria = i.getAttribute('aria-label') || "";
-            return aria.indexOf("payload_data") !== -1;
-        });
-        
-        if (!payloadInp && textInputs.length > 0) {
-            payloadInp = textInputs[textInputs.length - 1];
-        }
-
-        if (payloadInp) {
-            var strPayload = JSON.stringify(payload);
-            nativeSet(payloadInp, strPayload);
-        }
-    }
+    // flushAll removed in favor of 100% Native Streamlit session state tracking
 
     /* Intercept the submit button click: block it, flush all values into
        the hidden inputs, then re-click after a short delay so React has
@@ -1129,10 +1172,9 @@ def _inject_stepper_js():
                 btn._ccFlushed = false;
                 return;
             }
-            /* First click — block, flush values, then re-click after delay */
+            /* First click — block, then re-click after delay */
             e.preventDefault();
             e.stopImmediatePropagation();
-            flushAll();
             btn._ccFlushed = true;
             setTimeout(function() { btn.click(); }, 500);
         }, true); /* capture phase — fires before Streamlit's handler */
