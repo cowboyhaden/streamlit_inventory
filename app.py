@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.26"
+APP_VERSION = "v1.4.27"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -75,7 +75,7 @@ def _build_categories_from_records(records: list) -> list[dict]:
             meta = CATEGORY_META.get(cat_name, {"icon": "📋"})
             categories[cat_name] = {"name": cat_name, "icon": meta["icon"], "items": []}
 
-        if "scale 1 to 10" in unit.lower():
+        if "scale 1 to 10" in unit.lower() or unit.lower() == "scale":
             item = {
                 "name":    item_name,
                 "input":   "slider",
