@@ -8,7 +8,7 @@ import json
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.4.12"
+APP_VERSION = "v1.4.13"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -590,7 +590,8 @@ def render_reporting_screen():
     # ── Progress bar (live-updated by JS, no server round-trips) ─────────
     total_items = sum(len(cat["items"]) for cat in CATEGORIES)
     st.markdown(
-        f"<div style='margin-bottom:1rem;'>"
+        f"<div style='position: sticky; top: 0; z-index: 99; background: {COLOR_BG_PAGE}; "
+        f"padding: 10px 0; margin-bottom: 1rem; margin-top: -10px;'>"
         f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>"
         f"<span style='font-size:12px;color:{COLOR_TEXT_SECONDARY};font-weight:500;'>Items reported</span>"
         f"<span id='cc-pl' style='font-size:12px;font-weight:700;color:{COLOR_TEXT_PRIMARY};'>0 / {total_items}</span>"
@@ -617,10 +618,10 @@ def render_reporting_screen():
                         else:
                             dot_html = ""
                         st.markdown(
-                            f"<div style='display:flex;align-items:center;height:44px;gap:8px;'>"
+                            f"<div style='display:flex;align-items:center;min-height:44px;gap:8px;padding:4px 0;'>"
                             f"{dot_html}"
                             f"<span style='font-size:14px;font-weight:500;color:{COLOR_TEXT_PRIMARY};"
-                            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>"
+                            f"line-height:1.2; word-break:break-word;'>"
                             f"{item['name']}</span></div>",
                             unsafe_allow_html=True,
                         )
