@@ -4,11 +4,13 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import gspread
 import json
+import io
+from fpdf import FPDF
 
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.5.3"
+APP_VERSION = "v1.5.6"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -38,13 +40,27 @@ SPREADSHEET_ID       = "1int09gdLEXTXnydTLSSLmY-oNj3edG_ZKXgJC2CNZK0"
 LOG_WORKSHEET_GID    = 1487457430
 ITEMS_WORKSHEET_NAME = "Items"
 
+# Mapping from location name to "Need" worksheet tab name
+NEED_WORKSHEET_NAMES = {
+    "Town Square":   "Town Square Need",
+    "Teton Village": "Teton Village Need",
+    "Big Sky":       "Big Sky Need",
+}
+
 # Category display config
 CATEGORY_META = {
     "Coffee":      {"icon": "☕"},
     "Ingredients": {"icon": "🧃"},
     "Supplies":    {"icon": "📦"},
     "Merch":       {"icon": "🛍️"},
+    "Clothing":    {"icon": "👕"},
 }
+
+# Grey-out rules per category group
+# "zero"    → grey when need == 0
+# "low_pct" → grey when need >= 80 % of category max
+GREYOUT_ZERO_CATS  = {"Coffee", "Ingredients", "Supplies"}
+GREYOUT_LOWPCT_CATS = {"Merch", "Clothing"}
 
 
 # ==============================================================================
@@ -203,13 +219,14 @@ CATEGORIES = get_categories()
 
 # Session state init
 _SESSION_DEFAULTS = {
-    "screen":         "location",
-    "location":       None,
-    "manager_name":   "",
-    "inventory":      {},
-    "confirmed_zero": set(),
-    "submitted_time": None,
-    "sheets_status":  None,
+    "screen":                "location",
+    "location":              None,
+    "manager_name":          "",
+    "inventory":             {},
+    "confirmed_zero":        set(),
+    "submitted_time":        None,
+    "sheets_status":         None,
+    "print_report_location": None,
 }
 for _key, _default in _SESSION_DEFAULTS.items():
     if _key not in st.session_state:
@@ -562,6 +579,213 @@ def write_to_google_sheets(
         return False, str(exc)
 
 
+# ── Print Report helpers ───────────────────────────────────────────────────────
+def fetch_need_data(location: str) -> tuple[list[dict], dict[str, str]]:
+    """Return (need_rows, item_to_category_map).
+
+    need_rows: all records from the '[Location] Need' worksheet.
+    item_to_cat: {item_name: category_name} from the Items tab.
+    """
+    tab_name = NEED_WORKSHEET_NAMES.get(location)
+    if not tab_name:
+        return [], {}
+
+    gc          = _get_gspread_client()
+    spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+
+    need_rows = spreadsheet.worksheet(tab_name).get_all_records()
+
+    item_to_cat: dict[str, str] = {}
+    for row in spreadsheet.worksheet(ITEMS_WORKSHEET_NAME).get_all_records():
+        name = str(row.get("Item", "")).strip()
+        cat  = str(row.get("Category", "")).strip()
+        if name:
+            item_to_cat[name] = cat
+
+    return need_rows, item_to_cat
+
+
+def generate_need_pdf(location: str, rows: list[dict], item_to_cat: dict[str, str]) -> bytes:
+    """PDF pick list: only items where Refill? == 1, showing Current Need."""
+
+    # ── Detect column names case-insensitively ──
+    all_keys = list(rows[0].keys()) if rows else []
+
+    def _find(*candidates) -> str:
+        for k in all_keys:
+            if k.strip().lower() in [c.lower() for c in candidates]:
+                return k
+        return ""
+
+    item_col   = _find("item", "name")
+    need_col   = _find("current need", "need")
+    unit_col   = _find("unit")
+    refill_col = _find("refill?", "refill")
+
+    # ── Filter: only rows where Refill? == 1 ──
+    if refill_col:
+        rows = [r for r in rows if str(r.get(refill_col, "")).strip() == "1"]
+
+    COLS = [c for c in [item_col, need_col, unit_col] if c]
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    COL_W = {
+        item_col: page_w * 0.60,
+        need_col: page_w * 0.25,
+        unit_col: page_w * 0.15,
+    }
+    ROW_H = 9
+
+    date_str = datetime.now(ZoneInfo("America/Denver")).strftime("%B %-d, %Y")
+
+    # ── Shared helpers ──
+    def _page_title(subtitle: str):
+        pdf.set_font("Helvetica", "B", 20)
+        pdf.cell(0, 12, "Cowboy Coffee", ln=True, align="C")
+        pdf.set_font("Helvetica", "", 13)
+        pdf.cell(0, 8, f"{location} - {subtitle}", ln=True, align="C")
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(130, 100, 80)
+        pdf.cell(0, 7, f"Generated {date_str}", ln=True, align="C")
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(6)
+
+    def _table_header():
+        pdf.set_fill_color(61, 50, 41)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        for col in COLS:
+            pdf.cell(COL_W.get(col, 40), ROW_H, col, border=0, fill=True, align="L")
+        pdf.ln(ROW_H)
+        pdf.set_text_color(44, 24, 16)
+
+    def _cat_header(cat_name: str):
+        pdf.set_fill_color(168, 139, 107)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 10, f"  {cat_name}", ln=True, fill=True, align="L")
+        pdf.ln(1)
+
+    def _footer():
+        pdf.ln(4)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(160, 140, 130)
+        pdf.cell(0, 6, f"Cowboy Coffee Inventory Manager {APP_VERSION}", align="C")
+
+    if not rows or not COLS:
+        _page_title("Inventory Need Report")
+        pdf.set_font("Helvetica", "I", 11)
+        pdf.cell(0, 10, "No items found in Need sheet.", ln=True, align="C")
+        _footer()
+        return bytes(pdf.output())
+
+    # ── Group rows by category ──
+    cat_order = list(CATEGORY_META.keys())
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        item_name = str(row.get(item_col, "")).strip()
+        cat = item_to_cat.get(item_name, "")
+        grouped.setdefault(cat or "Other", []).append(row)
+    if "Other" in grouped and "Other" not in cat_order:
+        cat_order.append("Other")
+
+    # ── Pre-compute category max-need values ──
+    cat_max_need: dict[str, float] = {}
+    for cat_name, cat_rows in grouped.items():
+        if cat_name in GREYOUT_LOWPCT_CATS and need_col:
+            vals = []
+            for row in cat_rows:
+                try:
+                    vals.append(float(row.get(need_col, 0) or 0))
+                except (ValueError, TypeError):
+                    pass
+            cat_max_need[cat_name] = max(vals) if vals else 0.0
+
+    def _should_grey(row: dict, cat_name: str) -> bool:
+        if not need_col:
+            return False
+        try:
+            need_val = float(row.get(need_col, 0) or 0)
+        except (ValueError, TypeError):
+            need_val = 0.0
+        if cat_name in GREYOUT_ZERO_CATS:
+            return need_val == 0
+        if cat_name in GREYOUT_LOWPCT_CATS:
+            max_val = cat_max_need.get(cat_name, 0.0)
+            threshold = max_val * 0.80
+            return need_val < threshold
+        return False
+
+    def _render_categories(row_filter=None):
+        """Render all categories, optionally filtering rows with row_filter(row, cat_name) -> bool."""
+        first = True
+        for cat_name in cat_order:
+            cat_rows = grouped.get(cat_name)
+            if not cat_rows:
+                continue
+            display_rows = [r for r in cat_rows if row_filter is None or row_filter(r, cat_name)]
+            if not display_rows:
+                continue
+            if not first:
+                pdf.ln(4)
+            first = False
+            _cat_header(cat_name)
+            _table_header()
+            pdf.set_font("Helvetica", "", 10)
+            for i, row in enumerate(display_rows):
+                fill = i % 2 == 0
+                pdf.set_fill_color(*(245, 240, 233) if fill else (255, 255, 255))
+                pdf.set_text_color(44, 24, 16)
+                for col in COLS:
+                    pdf.cell(COL_W.get(col, 40), ROW_H, str(row.get(col, "")),
+                             border=0, fill=True, align="L")
+                pdf.ln(ROW_H)
+            pdf.set_text_color(44, 24, 16)
+
+    # ── TABLE 1: Priority items (non-greyed only) ──
+    _page_title("Priority Need Report")
+    _render_categories(row_filter=lambda r, c: not _should_grey(r, c))
+    _footer()
+
+    # ── TABLE 2: Full report (all items, greyed rows styled) ──
+    pdf.add_page()
+    _page_title("Full Inventory Need Report")
+
+    first = True
+    for cat_name in cat_order:
+        cat_rows = grouped.get(cat_name)
+        if not cat_rows:
+            continue
+        if not first:
+            pdf.ln(4)
+        first = False
+        _cat_header(cat_name)
+        _table_header()
+        pdf.set_font("Helvetica", "", 10)
+        for i, row in enumerate(cat_rows):
+            greyed = _should_grey(row, cat_name)
+            if greyed:
+                pdf.set_fill_color(220, 220, 220)
+                pdf.set_text_color(170, 170, 170)
+            else:
+                fill = i % 2 == 0
+                pdf.set_fill_color(*(245, 240, 233) if fill else (255, 255, 255))
+                pdf.set_text_color(44, 24, 16)
+            for col in COLS:
+                pdf.cell(COL_W.get(col, 40), ROW_H, str(row.get(col, "")),
+                         border=0, fill=True, align="L")
+            pdf.ln(ROW_H)
+        pdf.set_text_color(44, 24, 16)
+
+    _footer()
+
+    return bytes(pdf.output())
+
+
 # ── SCREEN 1: Location Selection ──────────────────────────────────────────────
 def render_location_screen():
     st.markdown(
@@ -614,6 +838,24 @@ def render_location_screen():
         f'{APP_VERSION}</p>',
         unsafe_allow_html=True,
     )
+
+    # ── Generate Report button ──
+    st.markdown(
+        f'<div style="display:flex; align-items:center; gap:10px; margin:1.2rem 0 0.6rem;">'
+        f'<div style="flex:1; height:1px; background:{COLOR_BORDER_SUBTLE};"></div>'
+        f'<span style="color:{COLOR_TEXT_TERTIARY}; font-size:11px; white-space:nowrap; letter-spacing:0.05em;">TOOLS</span>'
+        f'<div style="flex:1; height:1px; background:{COLOR_BORDER_SUBTLE};"></div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button(
+        "📋  **Generate Report**\n\nView items that need to be refilled",
+        key="print_report_btn",
+        use_container_width=True,
+    ):
+        st.session_state.screen = "print_report"
+        st.session_state.print_report_location = None
+        st.rerun()
 
 
 # ── SCREEN 2: Inventory Reporting ─────────────────────────────────────────────
@@ -1341,12 +1583,94 @@ def render_success_screen():
             st.rerun()
 
 
+# ── SCREEN: Print Report ──────────────────────────────────────────────────────
+def render_print_report_screen():
+    # Header
+    col_back, col_title = st.columns([1, 5])
+    with col_back:
+        if st.button("←", key="print_back"):
+            st.session_state.screen = "location"
+            st.session_state.print_report_location = None
+            st.rerun()
+    with col_title:
+        st.markdown(
+            f"<p style='font-size:20px; font-weight:700; color:{COLOR_TEXT_PRIMARY}; margin:0; padding-top:4px;'>"
+            "Print Report</p>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<p style='color:{COLOR_TEXT_SECONDARY}; font-size:14px;'>Select a location to generate the Inventory Need PDF.</p>",
+        unsafe_allow_html=True,
+    )
+
+    selected_loc = st.session_state.get("print_report_location")
+
+    if not selected_loc:
+        for loc in LOCATIONS:
+            if loc["name"] not in NEED_WORKSHEET_NAMES:
+                continue
+            if st.button(
+                f"{loc['icon']}  **{loc['name']}**",
+                key=f"print_loc_{loc['name']}",
+                use_container_width=True,
+            ):
+                st.session_state.print_report_location = loc["name"]
+                st.rerun()
+    else:
+        st.markdown(
+            f"<p style='font-size:15px; font-weight:600; color:{COLOR_TEXT_PRIMARY};'>" 
+            f"{selected_loc}</p>",
+            unsafe_allow_html=True,
+        )
+
+        # Generate PDF only once per location selection — cache bytes in session_state
+        # so that the download button always serves the same bytes even after reruns.
+        cache_key = f"_pdf_cache_{selected_loc}"
+        if cache_key not in st.session_state:
+            with st.spinner("Fetching need data…"):
+                try:
+                    rows, item_to_cat = fetch_need_data(selected_loc)
+                    pdf_bytes = generate_need_pdf(selected_loc, rows, item_to_cat)
+                    filename  = f"{selected_loc.lower().replace(' ', '_')}_need_report.pdf"
+                    st.session_state[cache_key] = {
+                        "pdf_bytes": pdf_bytes,
+                        "filename":  filename,
+                        "num_rows":  len(rows),
+                    }
+                except Exception as exc:
+                    st.error(f"Could not load Need sheet: {exc}")
+
+        cached = st.session_state.get(cache_key)
+        if cached:
+            st.download_button(
+                label="⬇️  Download PDF Report",
+                data=cached["pdf_bytes"],
+                file_name=cached["filename"],
+                mime="application/pdf",
+                type="primary",
+                use_container_width=True,
+            )
+            st.markdown(
+                f"<p style='font-size:12px; color:{COLOR_TEXT_TERTIARY}; margin-top:0.5rem;'>"
+                f"{cached['num_rows']} items loaded from Google Sheets.</p>",
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+        if st.button("← Change Location", key="print_change_loc"):
+            st.session_state.print_report_location = None
+            st.rerun()
+
+
 # ── Router ────────────────────────────────────────────────────────────────────
 _SCREENS = {
-    "location":  render_location_screen,
-    "reporting": render_reporting_screen,
-    "review":    render_review_screen,
-    "success":   render_success_screen,
+    "location":     render_location_screen,
+    "reporting":    render_reporting_screen,
+    "review":       render_review_screen,
+    "success":      render_success_screen,
+    "print_report": render_print_report_screen,
 }
 _SCREENS[st.session_state.screen]()
 
