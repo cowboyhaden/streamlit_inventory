@@ -836,7 +836,7 @@ def generate_restocking_pdf(location: str, rows: list[dict], item_to_cat: dict[s
     pdf.cell(0, 7, location, new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(122, 107, 94)
-    pdf.cell(0, 5, f"Generated {date_str}  •  {len(rows)} item{'s' if len(rows) != 1 else ''} to restock",
+    pdf.cell(0, 5, f"Generated {date_str}  |  {len(rows)} item{'s' if len(rows) != 1 else ''} to restock",
              new_x="LMARGIN", new_y="NEXT")
     pdf.set_draw_color(232, 223, 210)
     pdf.ln(4)
@@ -902,7 +902,7 @@ def generate_restocking_pdf(location: str, rows: list[dict], item_to_cat: dict[s
     pdf.ln(2)
     pdf.set_font("Helvetica", "", 7)
     pdf.set_text_color(168, 152, 136)
-    pdf.cell(0, 5, f"Cowboy Coffee  •  {APP_VERSION}", align="C")
+    pdf.cell(0, 5, f"Cowboy Coffee  |  {APP_VERSION}", align="C")
 
     return bytes(pdf.output())
 
