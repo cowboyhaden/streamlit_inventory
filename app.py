@@ -1749,21 +1749,35 @@ def render_print_report_screen():
         # Generate both PDFs once per location — cache in session_state.
         cache_key = f"_pdf_cache_{selected_loc}"
         if cache_key not in st.session_state:
+            # Step 1: fetch sheet data
+            rows, item_to_cat = None, None
             with st.spinner("Fetching need data from Google Sheets…"):
                 try:
                     rows, item_to_cat = fetch_need_data(selected_loc)
-                    restock_bytes = generate_restocking_pdf(selected_loc, rows, item_to_cat)
-                    full_bytes    = generate_need_pdf(selected_loc, rows, item_to_cat)
-                    slug          = selected_loc.lower().replace(" ", "_")
-                    st.session_state[cache_key] = {
-                        "restock_bytes": restock_bytes,
-                        "restock_file":  f"{slug}_restocking_report.pdf",
-                        "full_bytes":    full_bytes,
-                        "full_file":     f"{slug}_full_report.pdf",
-                        "num_rows":      len(rows),
-                    }
                 except Exception as exc:
-                    st.error(f"Could not load Need sheet: {exc}")
+                    st.error(f"Could not load '{selected_loc} Need' sheet: {exc}")
+
+            # Step 2: generate PDFs (separate so sheet errors and PDF errors are distinct)
+            if rows is not None:
+                with st.spinner("Generating reports…"):
+                    try:
+                        restock_bytes = generate_restocking_pdf(selected_loc, rows, item_to_cat)
+                        full_bytes    = generate_need_pdf(selected_loc, rows, item_to_cat)
+                        slug          = selected_loc.lower().replace(" ", "_")
+                        st.session_state[cache_key] = {
+                            "restock_bytes": restock_bytes,
+                            "restock_file":  f"{slug}_restocking_report.pdf",
+                            "full_bytes":    full_bytes,
+                            "full_file":     f"{slug}_full_report.pdf",
+                            "num_rows":      len(rows),
+                        }
+                    except ModuleNotFoundError as exc:
+                        st.error(
+                            f"PDF library not installed: **{exc}**\n\n"
+                            "Make sure `fpdf2` is in your `requirements.txt` and redeploy the app."
+                        )
+                    except Exception as exc:
+                        st.error(f"Could not generate PDF: {exc}")
 
         cached = st.session_state.get(cache_key)
         if cached:
