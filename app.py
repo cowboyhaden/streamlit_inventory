@@ -5,7 +5,6 @@ from zoneinfo import ZoneInfo
 import gspread
 import json
 import io
-from fpdf import FPDF
 
 # ==============================================================================
 # ##### CONFIGURATION #####
@@ -606,7 +605,8 @@ def fetch_need_data(location: str) -> tuple[list[dict], dict[str, str]]:
 
 
 def generate_need_pdf(location: str, rows: list[dict], item_to_cat: dict[str, str]) -> bytes:
-    """PDF pick list: only items where Refill? == 1, showing Current Need."""
+    """Full inventory need PDF — all rows, priority items first then greyed full list."""
+    from fpdf import FPDF
 
     # ── Detect column names case-insensitively ──
     all_keys = list(rows[0].keys()) if rows else []
@@ -617,14 +617,9 @@ def generate_need_pdf(location: str, rows: list[dict], item_to_cat: dict[str, st
                 return k
         return ""
 
-    item_col   = _find("item", "name")
-    need_col   = _find("current need", "need")
-    unit_col   = _find("unit")
-    refill_col = _find("refill?", "refill")
-
-    # ── Filter: only rows where Refill? == 1 ──
-    if refill_col:
-        rows = [r for r in rows if str(r.get(refill_col, "")).strip() == "1"]
+    item_col = _find("item", "name")
+    need_col = _find("current need", "need")
+    unit_col = _find("unit")
 
     COLS = [c for c in [item_col, need_col, unit_col] if c]
 
@@ -782,6 +777,132 @@ def generate_need_pdf(location: str, rows: list[dict], item_to_cat: dict[str, st
         pdf.set_text_color(44, 24, 16)
 
     _footer()
+
+    return bytes(pdf.output())
+
+
+def generate_restocking_pdf(location: str, rows: list[dict], item_to_cat: dict[str, str]) -> bytes:
+    """Restocking pick list — only items where Refill? == 1, grouped by category."""
+    from fpdf import FPDF
+
+    # ── Detect columns ──
+    all_keys = list(rows[0].keys()) if rows else []
+
+    def _find(*candidates) -> str:
+        for k in all_keys:
+            if k.strip().lower() in [c.lower() for c in candidates]:
+                return k
+        return ""
+
+    item_col   = _find("item", "name")
+    need_col   = _find("current need", "need")
+    unit_col   = _find("unit")
+    refill_col = _find("refill?", "refill")
+
+    # ── Filter to Refill? == 1 ──
+    if refill_col:
+        rows = [r for r in rows if str(r.get(refill_col, "")).strip() == "1"]
+
+    COLS   = [c for c in [item_col, need_col, unit_col] if c]
+    date_str = datetime.now(ZoneInfo("America/Denver")).strftime("%B %-d, %Y")
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_margins(18, 18, 18)
+    pdf.add_page()
+
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    COL_W  = {
+        item_col: page_w * 0.60,
+        need_col: page_w * 0.25,
+        unit_col: page_w * 0.15,
+    }
+    ROW_H = 9
+
+    # ── Header ──
+    pdf.set_fill_color(61, 50, 41)
+    pdf.rect(0, 0, 210, 30, style="F")
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_y(7)
+    pdf.cell(0, 9, "Cowboy Coffee", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(200, 185, 165)
+    pdf.cell(0, 6, "Restocking Pick List", align="C", new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_y(36)
+    pdf.set_text_color(44, 24, 16)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 7, location, new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(122, 107, 94)
+    pdf.cell(0, 5, f"Generated {date_str}  •  {len(rows)} item{'s' if len(rows) != 1 else ''} to restock",
+             new_x="LMARGIN", new_y="NEXT")
+    pdf.set_draw_color(232, 223, 210)
+    pdf.ln(4)
+    pdf.line(18, pdf.get_y(), 192, pdf.get_y())
+    pdf.ln(5)
+
+    if not rows:
+        pdf.set_font("Helvetica", "I", 11)
+        pdf.set_text_color(168, 152, 136)
+        pdf.cell(0, 10, "No items marked for restocking.", align="C", new_x="LMARGIN", new_y="NEXT")
+    else:
+        # Group by category
+        cat_order = list(CATEGORY_META.keys())
+        grouped: dict[str, list[dict]] = {}
+        for row in rows:
+            item_name = str(row.get(item_col, "")).strip()
+            cat = item_to_cat.get(item_name, "Other")
+            grouped.setdefault(cat, []).append(row)
+        if "Other" in grouped and "Other" not in cat_order:
+            cat_order.append("Other")
+
+        fill_toggle = False
+        for cat_name in cat_order:
+            cat_rows = grouped.get(cat_name)
+            if not cat_rows:
+                continue
+
+            if pdf.get_y() > 250:
+                pdf.add_page()
+
+            # Category sub-header
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(168, 139, 107)
+            pdf.ln(3)
+            pdf.cell(0, 6, cat_name.upper(), new_x="LMARGIN", new_y="NEXT")
+
+            # Column header
+            pdf.set_fill_color(61, 50, 41)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("Helvetica", "B", 9)
+            for col in COLS:
+                pdf.cell(COL_W.get(col, 40), ROW_H, col, border=0, fill=True,
+                         new_x="RIGHT", new_y="LAST")
+            pdf.ln(ROW_H)
+            pdf.set_text_color(44, 24, 16)
+            pdf.set_font("Helvetica", "", 9)
+
+            for row in cat_rows:
+                if pdf.get_y() > 265:
+                    pdf.add_page()
+                bg = (245, 240, 233) if fill_toggle else (255, 255, 255)
+                pdf.set_fill_color(*bg)
+                for col in COLS:
+                    pdf.cell(COL_W.get(col, 40), ROW_H, str(row.get(col, "")),
+                             border=0, fill=True, new_x="RIGHT", new_y="LAST")
+                pdf.ln(ROW_H)
+                fill_toggle = not fill_toggle
+
+    # ── Footer ──
+    pdf.set_y(-16)
+    pdf.set_draw_color(232, 223, 210)
+    pdf.line(18, pdf.get_y(), 192, pdf.get_y())
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_text_color(168, 152, 136)
+    pdf.cell(0, 5, f"Cowboy Coffee  •  {APP_VERSION}", align="C")
 
     return bytes(pdf.output())
 
@@ -1625,37 +1746,68 @@ def render_print_report_screen():
             unsafe_allow_html=True,
         )
 
-        # Generate PDF only once per location selection — cache bytes in session_state
-        # so that the download button always serves the same bytes even after reruns.
+        # Generate both PDFs once per location — cache in session_state.
         cache_key = f"_pdf_cache_{selected_loc}"
         if cache_key not in st.session_state:
-            with st.spinner("Fetching need data…"):
+            with st.spinner("Fetching need data from Google Sheets…"):
                 try:
                     rows, item_to_cat = fetch_need_data(selected_loc)
-                    pdf_bytes = generate_need_pdf(selected_loc, rows, item_to_cat)
-                    filename  = f"{selected_loc.lower().replace(' ', '_')}_need_report.pdf"
+                    restock_bytes = generate_restocking_pdf(selected_loc, rows, item_to_cat)
+                    full_bytes    = generate_need_pdf(selected_loc, rows, item_to_cat)
+                    slug          = selected_loc.lower().replace(" ", "_")
                     st.session_state[cache_key] = {
-                        "pdf_bytes": pdf_bytes,
-                        "filename":  filename,
-                        "num_rows":  len(rows),
+                        "restock_bytes": restock_bytes,
+                        "restock_file":  f"{slug}_restocking_report.pdf",
+                        "full_bytes":    full_bytes,
+                        "full_file":     f"{slug}_full_report.pdf",
+                        "num_rows":      len(rows),
                     }
                 except Exception as exc:
                     st.error(f"Could not load Need sheet: {exc}")
 
         cached = st.session_state.get(cache_key)
         if cached:
+            st.markdown(
+                f"<p style='font-size:12px; color:{COLOR_TEXT_TERTIARY}; margin:0 0 0.8rem;'>"
+                f"{cached['num_rows']} items loaded from Google Sheets.</p>",
+                unsafe_allow_html=True,
+            )
+
+            # Restocking Report (Refill? == 1 only)
+            st.markdown(
+                f"<p style='font-size:13px; font-weight:700; color:{COLOR_TEXT_PRIMARY}; margin:0.2rem 0 0.1rem;'>"
+                f"Restocking Report</p>"
+                f"<p style='font-size:12px; color:{COLOR_TEXT_SECONDARY}; margin:0 0 0.4rem;'>"
+                f"Items flagged for refill only</p>",
+                unsafe_allow_html=True,
+            )
             st.download_button(
-                label="⬇️  Download PDF Report",
-                data=cached["pdf_bytes"],
-                file_name=cached["filename"],
+                label="⬇️  Download Restocking Report",
+                data=cached["restock_bytes"],
+                file_name=cached["restock_file"],
                 mime="application/pdf",
                 type="primary",
                 use_container_width=True,
+                key="dl_restock",
             )
+
+            st.markdown("<div style='height:0.8rem'></div>", unsafe_allow_html=True)
+
+            # Full Report (all items)
             st.markdown(
-                f"<p style='font-size:12px; color:{COLOR_TEXT_TERTIARY}; margin-top:0.5rem;'>"
-                f"{cached['num_rows']} items loaded from Google Sheets.</p>",
+                f"<p style='font-size:13px; font-weight:700; color:{COLOR_TEXT_PRIMARY}; margin:0.2rem 0 0.1rem;'>"
+                f"Full Report</p>"
+                f"<p style='font-size:12px; color:{COLOR_TEXT_SECONDARY}; margin:0 0 0.4rem;'>"
+                f"Complete inventory need report for all items</p>",
                 unsafe_allow_html=True,
+            )
+            st.download_button(
+                label="⬇️  Download Full Report",
+                data=cached["full_bytes"],
+                file_name=cached["full_file"],
+                mime="application/pdf",
+                use_container_width=True,
+                key="dl_full",
             )
 
         st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
