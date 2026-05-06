@@ -9,7 +9,7 @@ import io
 # ==============================================================================
 # ##### CONFIGURATION #####
 # ==============================================================================
-APP_VERSION = "v1.5.6"
+APP_VERSION = "v1.6.0"
 APP_TITLE = "Cowboy Coffee"
 APP_SUBTITLE = "Inventory Manager"
 
@@ -907,6 +907,155 @@ def generate_restocking_pdf(location: str, rows: list[dict], item_to_cat: dict[s
     return bytes(pdf.output())
 
 
+def generate_blank_inventory_form_pdf(categories: list[dict]) -> bytes:
+    """General printable inventory recording form.
+
+    Lists every item across every category with a blank box for hand-recorded
+    quantities and a notes column. The header has fields for date, manager,
+    and a location checkbox row so a single form works for any location.
+    """
+    from fpdf import FPDF
+
+    class _FormPDF(FPDF):
+        def footer(self):
+            self.set_y(-12)
+            self.set_draw_color(232, 223, 210)
+            self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
+            self.ln(1.5)
+            self.set_font("Helvetica", "", 7)
+            self.set_text_color(168, 152, 136)
+            self.cell(
+                0, 5,
+                f"Cowboy Coffee  |  Inventory Recording Form  |  Page {self.page_no()}  |  {APP_VERSION}",
+                align="C",
+            )
+
+    pdf = _FormPDF()
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.set_margins(15, 15, 15)
+    pdf.add_page()
+
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+
+    # ── Top banner ──
+    pdf.set_fill_color(61, 50, 41)
+    pdf.rect(0, 0, pdf.w, 26, style="F")
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_y(6)
+    pdf.cell(0, 8, "Cowboy Coffee", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(200, 185, 165)
+    pdf.cell(0, 5, "Inventory Recording Form", align="C", new_x="LMARGIN", new_y="NEXT")
+
+    pdf.set_y(32)
+    pdf.set_text_color(44, 24, 16)
+
+    # ── Header fields: Date / Manager ──
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(16, 7, "Date:", border=0)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(60, 7, "", border="B")
+    pdf.cell(6, 7, "")
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(20, 7, "Manager:", border=0)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 7, "", border="B", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(3)
+
+    # ── Header fields: Location checkboxes ──
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(20, 7, "Location:", border=0)
+    pdf.set_font("Helvetica", "", 10)
+    box_size = 4
+    label_gap = 3
+    label_pad = 6
+    for loc in ("Town Square", "Teton Village", "Big Sky"):
+        x = pdf.get_x()
+        y = pdf.get_y()
+        pdf.set_draw_color(122, 107, 94)
+        pdf.rect(x, y + 1.5, box_size, box_size)
+        pdf.set_draw_color(0, 0, 0)
+        text_w = pdf.get_string_width(loc)
+        pdf.set_x(x + box_size + label_gap)
+        pdf.cell(text_w + label_pad, 7, loc, border=0)
+    pdf.ln(10)
+
+    # Divider under header
+    pdf.set_draw_color(168, 139, 107)
+    pdf.set_line_width(0.4)
+    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
+    pdf.set_line_width(0.2)
+    pdf.set_draw_color(0, 0, 0)
+    pdf.ln(3)
+
+    # ── Item table layout ──
+    COL_ITEM_W  = page_w * 0.50
+    COL_UNIT_W  = page_w * 0.18
+    COL_QTY_W   = page_w * 0.14
+    COL_NOTES_W = page_w - COL_ITEM_W - COL_UNIT_W - COL_QTY_W
+    ROW_H       = 9
+
+    def _table_header():
+        pdf.set_fill_color(61, 50, 41)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.cell(COL_ITEM_W,  ROW_H, "Item",     border=0, fill=True, align="L")
+        pdf.cell(COL_UNIT_W,  ROW_H, "Unit",     border=0, fill=True, align="L")
+        pdf.cell(COL_QTY_W,   ROW_H, "Quantity", border=0, fill=True, align="C")
+        pdf.cell(COL_NOTES_W, ROW_H, "Notes",    border=0, fill=True, align="L")
+        pdf.ln(ROW_H)
+        pdf.set_text_color(44, 24, 16)
+
+    def _cat_header(cat_name: str):
+        pdf.set_fill_color(168, 139, 107)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 8, f"  {cat_name}", new_x="LMARGIN", new_y="NEXT", fill=True, align="L")
+        pdf.set_text_color(44, 24, 16)
+
+    cat_order = list(CATEGORY_META.keys())
+    by_name = {c["name"]: c for c in categories}
+    extra = [n for n in by_name if n not in cat_order]
+    full_order = [n for n in cat_order if n in by_name] + extra
+
+    fill_toggle = False
+    for cat_name in full_order:
+        cat = by_name.get(cat_name)
+        if not cat or not cat.get("items"):
+            continue
+
+        if pdf.get_y() > 250:
+            pdf.add_page()
+
+        pdf.ln(2)
+        _cat_header(cat_name)
+        _table_header()
+        pdf.set_font("Helvetica", "", 9)
+
+        for item in cat["items"]:
+            if pdf.get_y() > 270:
+                pdf.add_page()
+                _cat_header(f"{cat_name} (continued)")
+                _table_header()
+                pdf.set_font("Helvetica", "", 9)
+
+            bg = (245, 240, 233) if fill_toggle else (255, 255, 255)
+            pdf.set_fill_color(*bg)
+            pdf.set_draw_color(220, 210, 195)
+
+            pdf.cell(COL_ITEM_W,  ROW_H, str(item.get("name", "")), border=0, fill=True, align="L")
+            pdf.cell(COL_UNIT_W,  ROW_H, str(item.get("unit", "")), border=0, fill=True, align="L")
+            pdf.cell(COL_QTY_W,   ROW_H, "", border="B", fill=True, align="C")
+            pdf.cell(COL_NOTES_W, ROW_H, "", border="B", fill=True, align="L")
+            pdf.ln(ROW_H)
+            fill_toggle = not fill_toggle
+
+        pdf.set_draw_color(0, 0, 0)
+
+    return bytes(pdf.output())
+
+
 # ── SCREEN 1: Location Selection ──────────────────────────────────────────────
 def render_location_screen():
     st.markdown(
@@ -1739,6 +1888,39 @@ def render_print_report_screen():
             ):
                 st.session_state.print_report_location = loc["name"]
                 st.rerun()
+
+        # ── General blank form (no location required) ──
+        st.markdown(
+            f'<div style="display:flex; align-items:center; gap:10px; margin:1.4rem 0 0.6rem;">'
+            f'<div style="flex:1; height:1px; background:{COLOR_BORDER_SUBTLE};"></div>'
+            f'<span style="color:{COLOR_TEXT_TERTIARY}; font-size:11px; white-space:nowrap; letter-spacing:0.05em;">OR</span>'
+            f'<div style="flex:1; height:1px; background:{COLOR_BORDER_SUBTLE};"></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<p style='font-size:13px; font-weight:700; color:{COLOR_TEXT_PRIMARY}; margin:0.2rem 0 0.1rem;'>"
+            f"Blank Recording Form</p>"
+            f"<p style='font-size:12px; color:{COLOR_TEXT_SECONDARY}; margin:0 0 0.4rem;'>"
+            f"Printable form for hand-recording inventory at any location</p>",
+            unsafe_allow_html=True,
+        )
+        blank_cache_key = "_pdf_cache_blank_form"
+        if blank_cache_key not in st.session_state:
+            try:
+                st.session_state[blank_cache_key] = generate_blank_inventory_form_pdf(CATEGORIES)
+            except Exception as exc:
+                st.error(f"Could not generate blank form: {exc}")
+        blank_bytes = st.session_state.get(blank_cache_key)
+        if blank_bytes:
+            st.download_button(
+                label="⬇️  Download Blank Recording Form",
+                data=blank_bytes,
+                file_name="cowboy_coffee_inventory_form.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key="dl_blank_form",
+            )
     else:
         st.markdown(
             f"<p style='font-size:15px; font-weight:600; color:{COLOR_TEXT_PRIMARY};'>" 
