@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import gspread
 import json
 import io
+from streamlit_local_storage import LocalStorage
 
 # ==============================================================================
 # ##### CONFIGURATION #####
@@ -230,6 +231,87 @@ _SESSION_DEFAULTS = {
 for _key, _default in _SESSION_DEFAULTS.items():
     if _key not in st.session_state:
         st.session_state[_key] = _default
+
+# ── Draft persistence via browser localStorage ────────────────────────────────
+# Survives accidental reload / back-swipe / tab close on the same device+browser.
+_LS = LocalStorage()
+_DRAFT_KEY = "cc_inventory_draft_v1"
+
+def _save_draft():
+    """Queue draft snapshot; persisted on the next rerun by _process_draft_io."""
+    st.session_state._pending_draft = json.dumps({
+        "screen":         st.session_state.screen,
+        "location":       st.session_state.location,
+        "manager_name":   st.session_state.manager_name,
+        "inventory":      st.session_state.inventory,
+        "confirmed_zero": list(st.session_state.confirmed_zero),
+    })
+
+def _clear_draft():
+    """Queue draft deletion; applied on the next rerun by _process_draft_io."""
+    st.session_state._pending_clear = True
+    st.session_state._hydrated = True  # no draft to restore from anymore
+
+def _process_draft_io():
+    """Render the LocalStorage component to flush any pending save/clear."""
+    pending_save = st.session_state.pop("_pending_draft", None)
+    if pending_save is not None:
+        try:
+            _LS.setItem(_DRAFT_KEY, pending_save, key="ls_save_widget")
+        except Exception:
+            pass
+    if st.session_state.pop("_pending_clear", False):
+        try:
+            _LS.deleteItem(_DRAFT_KEY, key="ls_clear_widget")
+        except Exception:
+            pass
+
+def _hydrate_from_draft():
+    """On session boot, restore draft from localStorage if one exists."""
+    if st.session_state.get("_hydrated"):
+        return
+    try:
+        stored = _LS.getItem(_DRAFT_KEY, key="ls_get_widget")
+    except Exception:
+        st.session_state._hydrated = True
+        return
+    if not stored:
+        return  # component still mounting; will auto-rerun when value arrives
+    try:
+        d = json.loads(stored)
+    except Exception:
+        st.session_state._hydrated = True
+        return
+    if d.get("location"):
+        st.session_state.inventory      = d.get("inventory", {}) or {}
+        st.session_state.confirmed_zero = set(d.get("confirmed_zero", []) or [])
+        st.session_state.manager_name   = d.get("manager_name", "") or ""
+        st.session_state.location       = d.get("location")
+        st.session_state.screen         = d.get("screen", "location")
+    st.session_state._hydrated = True
+    st.rerun()
+
+def _inject_unload_warn(active: bool):
+    """Toggle a window.beforeunload warning. Skip on iOS Safari — dialog ignored."""
+    flag = "true" if active else "false"
+    components.html(f"""<script>
+(function() {{
+  var w = window.parent;
+  w.__cc_warn = {flag};
+  if (w.__cc_unload_attached) return;
+  w.__cc_unload_attached = true;
+  w.addEventListener('beforeunload', function(e) {{
+    if (w.__cc_warn) {{
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }}
+  }});
+}})();
+</script>""", height=0)
+
+_process_draft_io()
+_hydrate_from_draft()
 
 def _inject_css():
     """Inject custom CSS — mobile-first, warm design."""
@@ -1058,6 +1140,7 @@ def generate_blank_inventory_form_pdf(categories: list[dict]) -> bytes:
 
 # ── SCREEN 1: Location Selection ──────────────────────────────────────────────
 def render_location_screen():
+    _inject_unload_warn(False)
     st.markdown(
         f"""<div style="text-align:center; padding:2rem 0 0.5rem 0;">
           <div style="display:inline-block; background:{COLOR_BG_DARK}; border-radius:16px;
@@ -1099,6 +1182,7 @@ def render_location_screen():
             st.session_state.screen    = "reporting"
             st.session_state.inventory = {}
             st.session_state.sheets_status = None
+            _save_draft()
             st.rerun()
 
     st.markdown(
@@ -1157,11 +1241,13 @@ def _oos_confirm_dialog(unreported: list):
             for name in unreported:
                 st.session_state.confirmed_zero.add(name)
             st.session_state.screen = "review"
+            _save_draft()
             st.rerun(scope="app")
 
 
 @st.fragment
 def render_reporting_screen():
+    _inject_unload_warn(True)
     # Green submit button
     st.markdown(
         f"<style>button[data-testid='stBaseButton-primary'],"
@@ -1177,6 +1263,7 @@ def render_reporting_screen():
             st.session_state.screen         = "location"
             st.session_state.inventory      = {}
             st.session_state.confirmed_zero = set()
+            _clear_draft()
             st.rerun(scope="app")
     with col_title:
         st.markdown(
@@ -1370,9 +1457,11 @@ def render_reporting_screen():
         ]
 
         if unreported:
+            _save_draft()  # capture entered values before dialog
             _oos_confirm_dialog(unreported)
         else:
             st.session_state.screen = "review"
+            _save_draft()
             st.rerun(scope="app")
 
     _inject_stepper_js()
@@ -1713,6 +1802,7 @@ def _inject_stepper_js():
 
 # ── SCREEN 3: Review & Submit ─────────────────────────────────────────────────
 def render_review_screen():
+    _inject_unload_warn(True)
     # Submit button is always green on the review screen
     st.markdown(
         f"<style>button[data-testid='stBaseButton-primary'] "
@@ -1789,6 +1879,8 @@ def render_review_screen():
             get_last_reported_dates.clear()  # refresh location card subtitles
 
         st.session_state.screen = "success"
+        if ok:
+            _clear_draft()
         st.rerun()
 
     st.markdown("")
@@ -1796,11 +1888,13 @@ def render_review_screen():
     with center_col:
         if st.button("Go Back & Edit", key="go_back_edit", use_container_width=True):
             st.session_state.screen = "reporting"
+            _save_draft()
             st.rerun()
 
 
 # ── SCREEN 4: Success ─────────────────────────────────────────────────────────
 def render_success_screen():
+    _inject_unload_warn(False)
     st.markdown("")
     st.markdown("")
 
@@ -1850,6 +1944,7 @@ def render_success_screen():
             st.session_state.location       = None
             st.session_state.sheets_status  = None
             st.session_state.confirmed_zero = set()
+            _clear_draft()
             st.rerun()
 
 
